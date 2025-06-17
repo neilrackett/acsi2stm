@@ -38,16 +38,18 @@ syshook:
 	;  syshook.prmoff: Offset to a7 to find params (platform dependent)
 
 	tst.b	flock.w                 ; Prevent reentrant calls
-	bne.b	syshook.rts             ;
+	bne.s	syshook.rts             ;
 
 	savereg	                        ; Save registers
 
-	bsr.b	syshook.setprm          ; Set a2 (DMA address) at the parameters
+	bsr.s	syshook.setprm          ; Set a2 (DMA address) at the parameters
 
 	cmp.w	#$0020,(a2)             ; Don't hook Super because it breaks
 	beq.b	syshook.forward         ; some programs such as ICDFMT.PRG
 
+
 syshook.sendcmd:
+	bsr.s syshook.mstedisablecache
 	st	flock.w                 ; Lock floppy controller
 	bsr.w	syshook.setdmaaddr      ; Set DMA address on chip
 
@@ -67,7 +69,7 @@ syshook.reply:
 	move.w	(a0),d0                 ; Read command/status byte
 
 	cmp.b	#$9a,d0                 ; Check if command byte
-	beq.b	syshook.forward         ; Check command $9a (forward to TOS)
+	beq.b	syshook.forwardrestorecache         ; Check command $9a (forward to TOS)
 	blt.b	syshook.execcmd         ; Other commands with parameter
 
 .qret	ext.w	d0                      ; Quick return sign-extended d0
@@ -76,11 +78,14 @@ syshook.reply:
 	; Fall through syshook.return
 syshook.return:
 	; Return from interrupt
+	bsr.s  syshook.msterestorecache
 	sf	flock.w                 ; Unlock floppy controller
 	resreg	                        ; Restore registers
 	addq	#4,sp                   ; Pop forward address
 	rte	                        ; Return
 
+syshook.forwardrestorecache:
+	bsr.s  syshook.msterestorecache
 syshook.forward:
 	; Command $9a: forward the call to the next handler
 	sf	flock.w                 ; Unlock floppy controller
@@ -91,8 +96,16 @@ syshook.rts
 syshook.init:
 	savereg	                        ; Save registers
 	and.w	#$00e0,d0               ; Send "init ok" command
-	bra.b	syshook.sendcmd
+	bra.s	syshook.sendcmd
 
+syshook.mstedisablecache:
+	DISABLECACHE
+	rts
+
+syshook.msterestorecache:
+	RESTORECACHE
+	rts
+	
 syshook.setprm:
 	; Point a2 at the parameters of the initial call
 	; The supervisor stack must point at the trap stack frame
@@ -140,7 +153,7 @@ syshook.execcmd:
 syshook.rte
 	; Command $80: Return long from exception
 	move.l	d1,d0                   ; Put parameter in d0
-	bra.b	syshook.return          ; Return from exception
+	bra		syshook.return          ; Return from exception
 
 syshook.pexec4:
 	; Command $88: Pexec4 and rte
@@ -154,10 +167,11 @@ syshook.pexec6:
 	; Fall through syshook.pexec
 
 syshook.pexec:
+	bsr.s  syshook.msterestorecache
 	sf	flock.w                 ; Unlock floppy controller
 
 	; Patch the current Pexec call, then forward
-	bsr.w	syshook.setprm          ; Point at Pexec parameters
+	bsr.s	syshook.setprm          ; Point at Pexec parameters
 
 	addq	#2,a2                   ; Skip Pexec opcode
 	move.w	d0,(a2)+                ; Pexec.mode (set to 4 or 6)
@@ -277,8 +291,9 @@ syshook.setdmaaddr:
 	move.b	d1,dmamid.w             ;
 	lsr.l	#8,d1                   ;
 	move.b	d1,dmahigh.w            ;
-
+dorts:
 	rts
+
 
 ; Variables
 syshook.dmareg	dc.w	dmadata,dmactrl ; DMA port addresses

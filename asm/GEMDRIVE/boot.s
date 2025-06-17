@@ -16,6 +16,7 @@
 
 	incdir	..\inc\
 	include	tos.i
+	include mstefix.i
 
 start:
 
@@ -29,9 +30,22 @@ acsiid	moveq	#$0e,d0                 ; Set command (patched by code)
 
 	include	syshook.s               ; Enter syshook mode
 
-load	st	flock.w                 ; Lock floppy controller
+load	
 
-	bsr.w	syshook.setdmaaddr      ; Reset DMA chip
+	; we'll give the user a chance to skip GEMDOS mode if anything goes awry (yes, I'm looking at you MSTE+16Mhz+cache)
+	;move.w  #-1,-(sp)   			
+	move.l  #$Bffff,-(sp)    			; KBshift
+	trap    #13          
+	addq.l  #4,sp
+	and.w   #$f,d0        			; check RShift/LShift/Ctrl/Alt
+	bne.s   dorts 			; exit
+
+	st	flock.w                 ; Lock floppy controller
+
+	CHECKMSTE
+	bsr 	syshook.mstedisablecache
+
+	bsr.s	syshook.setdmaaddr      ; Reset DMA chip
 	move.w	#$0088,(a1)             ; Switch to command.
 	move.w	acsiid(pc),d0           ; Get ACSI id
 	and.w	#$00e0,d0               ; Filter out command
@@ -48,9 +62,14 @@ load	st	flock.w                 ; Lock floppy controller
 	tst.b	d0                      ; 0 = success
 	bne.b	load                    ; If not successful, retry
 
+	bsr 	syshook.msterestorecache
+
 	move.w	acsiid(pc),d0           ; Read acsi id
 	bra.w	syshook.init            ; Initialize
 
+cachestate:
+	dc.b  	0
+	even
 	end
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80

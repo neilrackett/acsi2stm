@@ -18,8 +18,10 @@
 
 	incdir	..\inc\
 	include	tos.i
+	include	mstefix.i
 
 	opt	O+
+	opt	d+
 
 ; Command-line is used as BSS after going resident.
 ; Structure, repeated up to 8 times

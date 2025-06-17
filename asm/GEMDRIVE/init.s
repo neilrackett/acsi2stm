@@ -17,6 +17,8 @@
 ; PRG loader for the GemDrive system hook
 ; Initialization code - shared with GEMDRPIO
 
+    include	mstefix.i
+
 main	lea	stack,sp                ; Initialize stack
 
 	Super	                        ; This program needs super user
@@ -38,6 +40,7 @@ main	lea	stack,sp                ; Initialize stack
 
 .notins	; GemDrive not installed
 	; Scan for devices and install the driver
+	CHECKMSTE
 
 	move.w	#$700e,d7               ; d7 = pre-shifted ACSI id and moveq
 	lea	start-$80(pc),a5        ; a5 = handler generator pointer
@@ -54,6 +57,7 @@ main	lea	stack,sp                ; Initialize stack
 .test	; Test for ACSI device in d7
 
 	st	flock.w                 ; Lock floppy controller
+	DISABLECACHE
 
 	moveq	#0,d0                   ; Clear command byte register
 	moveq	#5,d2                   ; 6 command bytes
@@ -87,6 +91,8 @@ main	lea	stack,sp                ; Initialize stack
 
 	; Enter syshook mode to run onInit on the STM32
 
+	RESTORECACHE
+
 	move.b	d7,d0                   ;
 	bsr	syshook.init
 
@@ -106,12 +112,12 @@ main	lea	stack,sp                ; Initialize stack
 
 .nxtid	add.b	#$20,d7                 ; Point at next ACSI id
 	cmp.b	#$20,d7                 ;
-	bhi.b	.test                   ; Try next ACSI id
+	bhi		.test                   ; Try next ACSI id
 
 	; Installation finished for all devices
 
 .instok	sf	flock.w                 ; Unlock floppy controller
-
+	
 	cmp.w	#$6070,d6               ; Check if a vector was written
 	bne.b	.gores                  ; If yes, stay resident
 
@@ -124,6 +130,8 @@ main	lea	stack,sp                ; Initialize stack
 	move.l	#$100+(syshook.end-start),-(sp) ; TSR memory size
 	gemdos	Ptermres                ; Terminate and stay resident
 
+cachestate:
+	dc.b  	0
 	; data
 bootcmd	dc.b	BOOTCMD,$00,'G','D','R','V',0
 	even
