@@ -9,7 +9,6 @@ DESKTOP.INF
 *.exe
 *.bin
 *.BIN
-pcb/MegaSTE Internal/fp-info-cache
 *.gbl
 *.gbs
 *.gbp
@@ -21,4 +20,8 @@ pcb/MegaSTE Internal/fp-info-cache
 *.gto
 *.gbr
 *.drl
+*.o
+.DS_Store
+pcb/MegaSTE Internal/fp-info-cache
 pcb/MegaSTE Internal/ACSI2STM MegaSTE-backups/*
+tmp/
