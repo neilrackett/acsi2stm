@@ -73,6 +73,8 @@ void SysHook::sendAt(uint32_t address, const uint8_t *bytes, int count)
 
   while(count >= 16) {
     int blockSize = count & 0x1fff0;
+    if(blockSize > (int)maxDmaFill)
+      blockSize = maxDmaFill;
 
     setDmaRead(address);
     sendDma(bytes, blockSize);
@@ -205,11 +207,20 @@ void SysHook::clearAt(uint32_t bytes, uint32_t address) {
     --bytes;
   }
 
-  if(bytes >= 16) {
+  // The ST side arms the DMA sector count at 255 for each setDmaRead, and
+  // the DMA chip stops writing to memory once that runs out while still
+  // taking the bytes, so a single fill reaches 255 * 512 bytes at most.
+  // A program's BSS can be bigger: one of 158K kept its last 30K from
+  // the previous program, and that program crashed on its second run.
+  // Fill in pieces, re-arming the DMA for each.
+  while(bytes >= 16) {
+    uint32_t chunk = bytes & 0xfffffff0;
+    if(chunk > maxDmaFill)
+      chunk = maxDmaFill;
     setDmaRead(address);
-    DmaPort::fillDma(0, bytes & 0xfffffff0);
-    address += bytes & 0xfffffff0;
-    bytes -= bytes & 0xfffffff0;
+    DmaPort::fillDma(0, chunk);
+    address += chunk;
+    bytes -= chunk;
   }
 
   if(bytes)
