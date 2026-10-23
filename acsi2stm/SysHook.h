@@ -390,6 +390,11 @@ struct SysHook: public Monitor {
   // This should be detected on real hardware because some Alt-RAM expansions
   // will break if they are in this range.
   static uint32_t dmatop;
+
+  // Most bytes one DMA transfer can write: the sector count the ST side
+  // sets (255) times the sector size. sendAt's 0x1fff0 mask alone lets a
+  // block run 496 bytes past it.
+  static const uint32_t maxDmaFill = 255 * 512;
 };
 
 // vim: ts=2 sw=2 sts=2 et
