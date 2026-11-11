@@ -1790,6 +1790,10 @@ bool GemDrive::onFwrite(const Tos::Fwrite_p &p) {
 
     if(writtenBytes < 0) {
       return rte(EWRITF);
+    } else if(writtenBytes == 0) {
+      // Nothing written: the card is full or the write failed. Return what
+      // was written so far, like TOS does, instead of trying forever.
+      break;
     } else {
       done += writtenBytes;
       ptr += writtenBytes;
