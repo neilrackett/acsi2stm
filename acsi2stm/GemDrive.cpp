@@ -963,6 +963,7 @@ void GemDrive::process(uint8_t cmd) {
         if(buf[0] != 0x00 || buf[1] != 0x00 || buf[2] != 0x00 || buf[3] != 0x01 || buf[4] != 0x00) {
           // Not a boot query: send the 'no operation' SCSI status
           DmaPort::sendIrq(0x08);
+          break;
         }
 
         // Build a boot sector
