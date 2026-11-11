@@ -425,11 +425,15 @@ void DmaPort::sendIrqToggle(const uint8_t *bytes, int count) {
     waitCs();
   }
 
+  // A fast ST sends its next byte a few microseconds after reading the last
+  // one: listen for it before anything else. Releasing IRQ comes after,
+  // because the line takes time to rise.
+  armA1();
+
   // Go back to the idle state
   releaseRq();
   releaseDataBus();
   waitIrqUp();
-  armA1();
 
   // Restore systick
   systick_enable();
