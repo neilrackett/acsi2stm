@@ -201,10 +201,27 @@ Each build goes to `build.tt` or `build.mste`:
 
 * `acsi2stm-XXXX.ino.bin` and `acsi2stm-XXXX-debug.ino.bin`: the firmware and
   its debug variant.
-* `GEMDRIVE.PRG`: the matching driver. The firmware and `GEMDRIVE.PRG` must
-  always come from the same build: other versions don't detect each other.
+* `GEMDRIVE.PRG`: the matching driver. It is the same file in both builds.
+  The firmware and `GEMDRIVE.PRG` must always come from the same version:
+  other versions don't detect each other.
 * `hddflash`: `HDDFLASH.TOS` with the firmware as `HDDFLASH.BIN`, ready to
   flash from the Atari.
+
+### One unit for a Mega STE and other machines
+
+`GEMDRIVE.PRG` has no size limit, so unlike the boot sector it carries the Mega
+STE workaround along with everything else, and enables it when it finds a Mega
+STE.
+
+With the generic firmware, put `GEMDRIVE.PRG` in the `AUTO` folder of the
+GemDrive card. On a Mega STE, the unit boots as usual at 8MHz, then
+`GEMDRIVE.PRG` replaces the driver installed by the boot sector and prints
+`GemDrive: Mega STE driver installed`. 16MHz and the cache can then be switched
+on. On other machines it sees that GemDrive is already running and exits
+without a word, so the same card and the same unit work everywhere.
+
+Switch to 16MHz after the `AUTO` folder has run, not before: until then the
+driver of the boot sector is in charge.
 
 The variant is selected by `MSTE` in `asm/GEMDRIVE/mste.i`. The file
 `acsi2stm/GEMDRIVE.boot.h` in the source tree is the generic driver, which is

@@ -1046,7 +1046,7 @@ void GemDrive::process(uint8_t cmd) {
       for(int b = 0; b < 5; ++b)
         buf[b] = DmaPort::readIrq();
 
-      if(buf[0] != 0x00 || buf[1] != 'G' || buf[2] != 'D' || buf[3] != 'R' || buf[4] != INIT_VER) {
+      if(buf[0] > 0x01 || buf[1] != 'G' || buf[2] != 'D' || buf[3] != 'R' || buf[4] != INIT_VER) {
         // Incorrect query: send the 'no operation' SCSI status
         DmaPort::sendIrq(0x08);
         break;
@@ -1054,6 +1054,11 @@ void GemDrive::process(uint8_t cmd) {
 
       // Acknowledge the ACSI command
       DmaPort::sendIrq(0);
+
+      if(buf[0])
+        // Version check only: GEMDRIVE.PRG is about to replace the driver
+        // installed by the boot sector, everything else stays as it is.
+        break;
 
       // Wait for the command byte telling that the ST is ready
       DmaPort::waitCommand();

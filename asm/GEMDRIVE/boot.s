@@ -18,6 +18,8 @@
 	include	tos.i
 	include	mste.i
 
+PRG	equ	0                       ; Boot sector variant of syshook.s
+
 start:
 
 	bra.w	load                    ; Send the load ACSI command

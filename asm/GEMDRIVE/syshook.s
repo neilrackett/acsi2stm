@@ -36,6 +36,14 @@ spoff	equ	5*4
 	; Size of the private stack, see syshook.bounce
 syshook.stksize	equ	2048
 
+	; Build variants. MSTE is the Mega STE switch (see mste.i), PRG is 1
+	; in GEMDRIVE.PRG and 0 in the boot sector.
+	; GEMDRIVE.PRG has room for everything and sorts it out when it starts.
+	; The boot sector has either the Mega STE cache workaround, or what a
+	; 68030 and TT-RAM need.
+syshook.mstefix	equ	MSTE+PRG        ; Not 0: cache workaround built in
+syshook.nott	equ	MSTE*(1-PRG)    ; Not 0: 68030 and TT-RAM code left out
+
 syshook:
 	; Initialize registers for hook subroutines
 	; Input:
@@ -47,20 +55,24 @@ syshook:
 
 	savereg	                        ; Save registers
 
+	IFNE	PRG
+	bsr.w	syshook.setprm          ; Set a2 (DMA address) at the parameters
+	ELSE
 	bsr.b	syshook.setprm          ; Set a2 (DMA address) at the parameters
+	ENDC
 
 	cmp.w	#$0020,(a2)             ; Don't hook Super because it breaks
 	beq.b	syshook.forward         ; some programs such as ICDFMT.PRG
 
 	cmpa.l	phystop.w,a2            ; DMA can't reach parameters above
-	IFNE	MSTE
+	IFNE	syshook.nott
 	bhs.b	syshook.forward         ; phystop: leave the call to TOS
 	ELSE
 	bhs.b	syshook.bounce          ; phystop (TT-RAM, Alt-RAM)
 	ENDC
 
 syshook.sendcmd:
-	IFNE	MSTE
+	IFNE	syshook.mstefix
 	bsr.b	syshook.msteoff         ; Turn the Mega STE cache off
 	ENDC
 	st	flock.w                 ; Lock floppy controller
@@ -91,7 +103,7 @@ syshook.reply:
 	; Fall through syshook.return
 syshook.return:
 	; Return from interrupt
-	IFNE	MSTE
+	IFNE	syshook.mstefix
 	bsr.b	syshook.msteres         ; Set the Mega STE cache back
 	ENDC
 	sf	flock.w                 ; Unlock floppy controller
@@ -100,7 +112,7 @@ syshook.return:
 	rte	                        ; Return
 
 syshook.fwdres:
-	IFNE	MSTE
+	IFNE	syshook.mstefix
 	bsr.b	syshook.msteres         ; Set the Mega STE cache back
 	ENDC
 syshook.forward:
@@ -110,22 +122,7 @@ syshook.forward:
 syshook.rts
 	rts	                        ; Jump to forwarding address
 
-	IFNE	MSTE
-
-syshook.msteoff:
-	; Save the state of the Mega STE cache and turn it off
-	; Alters a0 only
-	lea	syshook.mstecst(pc),a0  ;
-	move.b	mstecache.w,(a0)        ; Save the cache register
-	and.b	#$fe,mstecache.w        ; Clear the cache enable bit
-	rts
-
-syshook.msteres:
-	; Set the Mega STE cache back to its saved state
-	move.b	syshook.mstecst(pc),mstecache.w
-	rts
-
-	ELSE
+	IFEQ	syshook.nott
 
 syshook.bounce:
 	; Parameters are above phystop, out of DMA reach: send their address
@@ -143,7 +140,11 @@ syshook.bounce:
 	blo.b	syshook.sendcmd         ;
 
 	move.l	sp,4(a0)                ; Store the caller's sp
+	IFNE	PRG
+	move.l	syshook.stkptr(pc),sp   ; Switch to the private stack
+	ELSE
 	lea	syshook.stack(pc),sp    ; Switch to the private stack
+	ENDC
 	subq.b	#1,d0                   ; Command $0d becomes $0c
 	bra.b	syshook.sendcmd         ;
 
@@ -153,6 +154,24 @@ syshook.init:
 	savereg	                        ; Save registers
 	and.w	#$00e0,d0               ; Send "init ok" command
 	bra.b	syshook.sendcmd
+
+	IFNE	syshook.mstefix
+
+syshook.msteoff:
+	; Save the state of the Mega STE cache and turn it off
+	; Alters a0 only
+	; GEMDRIVE.PRG turns both routines into a rts on other machines
+	lea	syshook.mstecst(pc),a0  ;
+	move.b	mstecache.w,(a0)        ; Save the cache register
+	and.b	#$fe,mstecache.w        ; Clear the cache enable bit
+	rts
+
+syshook.msteres:
+	; Set the Mega STE cache back to its saved state
+	move.b	syshook.mstecst(pc),mstecache.w
+	rts
+
+	ENDC
 
 syshook.setprm:
 	; Point a2 at the parameters of the initial call
@@ -209,7 +228,7 @@ syshook.execcmd:
 	dc.w	syshook.pshword-.jmptbl ; $92
 	dc.w	syshook.pushsp-.jmptbl  ; $94
 	dc.w	syshook.trap01-.jmptbl  ; $96
-	IFEQ	MSTE
+	IFEQ	syshook.nott
 	dc.w	syshook.flush-.jmptbl   ; $98
 	ENDC
 
@@ -225,7 +244,7 @@ syshook.pexec6:
 	; Fall through syshook.pexec
 
 syshook.pexec:
-	IFNE	MSTE
+	IFNE	syshook.mstefix
 	bsr.w	syshook.msteres         ; Set the Mega STE cache back
 	ENDC
 	sf	flock.w                 ; Unlock floppy controller
@@ -242,7 +261,7 @@ syshook.pexec:
 	resreg	                        ; Restore registers
 	rts	                        ; Forward to GEMDOS
 
-	IFEQ	MSTE
+	IFEQ	syshook.nott
 syshook.flush:
 	; Command $98: clear 68020/68030 caches after DMA wrote to RAM
 	; Only sent by the STM32 to machines that have these caches
@@ -364,7 +383,7 @@ syshook.setdmaaddr:
 
 ; Variables
 syshook.dmareg	dc.w	dmadata,dmactrl ; DMA port addresses
-	IFNE	MSTE
+	IFNE	syshook.mstefix
 syshook.mstecst	dc.w	0               ; Mega STE cache state (high byte)
 	ENDC
 	

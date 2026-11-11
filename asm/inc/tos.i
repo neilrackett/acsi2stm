@@ -153,6 +153,7 @@ memtop=$436                             ; Top of TOS RAM
 dskbufp=$4c6                            ; Disk buffers
 bufl=$4b2                               ; Buffer lists
 _longframe=$59e                         ; Word: true if using long frames
+_p_cookies=$5a0                         ; Cookie jar address, 0 if none
 memvalid=$420                           ; Magic number to detect if RAM is valid
 
 ; Exception vectors

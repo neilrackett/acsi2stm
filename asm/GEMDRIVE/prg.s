@@ -20,6 +20,8 @@
 	include	tos.i
 	include	mste.i
 
+PRG	equ	1                       ; GEMDRIVE.PRG variant of syshook.s
+
 	opt	O+
 
 ; Command-line is used as BSS after going resident.
@@ -42,6 +44,7 @@ start	bra.w	main                    ; Initialization is in the freed zone
 
 prmoff	dc.w	$0006                   ; Detected during initialization
 syshook.bnbuf	ds.l	2               ; See syshook.bounce
+syshook.stkptr	ds.l	1               ; Top of the private stack
 
 syshook.end
 	; Freed zone: everything after this is freed when the driver is made
@@ -52,6 +55,8 @@ syshook.stack	equ	syshook.end+syshook.stksize
 
 	; Strings
 alrdyin	dc.b	7,'GemDrive already installed',13,10,0
+tkover	dc.b	'GemDrive: Mega STE driver installed',13,10,0
+wrgver	dc.b	7,'GEMDRIVE.PRG and firmware versions differ',13,10,0
 devnfnd	dc.b	'No GemDrive device detected',13,10,0
 nostram	dc.b	7,'GemDrive must load in ST-RAM',13,10,0
 	even

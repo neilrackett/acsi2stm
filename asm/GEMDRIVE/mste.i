@@ -37,5 +37,6 @@ MSTE	equ	0                       ; Generic driver by default
 	ENDC
 
 mstecache	equ	$ffff8e21       ; Cache and CPU speed register
+mstemch	equ	$00010010               ; _MCH cookie of the Mega STE
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80

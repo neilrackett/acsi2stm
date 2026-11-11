@@ -23,23 +23,6 @@ main	lea	stack,sp                ; Initialize stack
 
 	Super	                        ; This program needs super user
 
-	; Check if the driver is already installed
-
-	move.l	gemdos.vector.w,a0      ; Start at interrupt vector
-.nxtvec	cmp.l	#'XBRA',-12(a0)         ; Check if it is a XBRA marker
-	bne.b	.notins                 ;
-
-	cmp.l	#XBRA,-8(a0)            ; Check GemDrive XBRA marker
-	bne.b	.na2st                  ;
-
-	print	alrdyin(pc)             ; Found XBRA marker in the chain,
-	Pterm0                          ; Don't install and quit now.
-
-.na2st	move.l	-4(a0),a0               ; Check next vector in the chain
-	bra.b	.nxtvec                 ;
-
-.notins	; GemDrive not installed
-
 	lea	start(pc),a0            ; DMA must reach the resident driver:
 	cmpa.l	phystop.w,a0            ; refuse to run from TT-RAM or Alt-RAM
 	blo.b	.stram                  ;
@@ -47,12 +30,35 @@ main	lea	stack,sp                ; Initialize stack
 	print	nostram(pc)             ;
 	Pterm0	                        ;
 
-.stram	; Scan for devices and install the driver
+.stram	; Check for a Mega STE with the _MCH cookie
+
+	moveq	#0,d4                   ; d4 = Mega STE flag
+	move.l	_p_cookies.w,d0         ; Find the cookie jar
+	beq.b	.nmste                  ;
+	move.l	d0,a0                   ;
+.cookie	move.l	(a0)+,d0                ; Cookie name, 0 ends the jar
+	beq.b	.nmste                  ;
+	move.l	(a0)+,d1                ; Cookie value
+	cmp.l	#'_MCH',d0              ;
+	bne.b	.cookie                 ;
+	cmp.l	#mstemch,d1             ;
+	bne.b	.nmste                  ;
+	moveq	#1,d4                   ;
+	bra.b	.ismste                 ;
+
+.nmste	; Not a Mega STE: turn both cache routines into a rts
+
+	lea	syshook.msteoff(pc),a0  ;
+	move.w	#$4e75,(a0)             ;
+	lea	syshook.msteres(pc),a0  ;
+	move.w	#$4e75,(a0)             ;
+.ismste
+
+	; Set up the driver
 
 	move.w	#$700e,d7               ; d7 = pre-shifted ACSI id and moveq
 	lea	start-$80(pc),a5        ; a5 = handler generator pointer
 	move.w	#$6070,d6               ; d6 = "bra.b" to syshook
-	lea	gemdos.vector.w,a3      ; a3 = gemdos vector address
 	lea	start-$10,a4            ; a4 = last interrupt handler address
 
 	lea	prmoff(pc),a0           ; Compute parameter offset (prmoff)
@@ -61,10 +67,78 @@ main	lea	stack,sp                ; Initialize stack
 	move.w	#8,(a0)                 ; prmoff = 8
 .shrtfr
 
-	IFNE	MSTE
+	lea	syshook.stkptr(pc),a0   ; The private stack follows the resident
+	lea	syshook.stack(pc),a1    ; driver
+	move.l	a1,(a0)                 ;
+
+	; Check if the driver is already installed
+
+	lea	gemdos.vector.w,a3      ; a3 = address of the vector to hook
+.nxtvec	move.l	(a3),a6                 ; a6 = handler it points at
+	cmp.l	#'XBRA',-12(a6)         ; Check if it is a XBRA marker
+	bne.w	.notins                 ;
+
+	cmp.l	#XBRA,-8(a6)            ; Check GemDrive XBRA marker
+	beq.b	.found                  ;
+
+	lea	-4(a6),a3               ; Check next vector in the chain
+	bra.b	.nxtvec                 ;
+
+.found	; GemDrive is already installed
+	; If the boot sector did it on a Mega STE, take over: its driver has
+	; no room for the cache workaround.
+
+	cmp.b	#$60,6(a6)              ; "bra.b syshook": it's a GEMDRIVE.PRG
+	beq.b	.alrdy                  ;
+
+	tst.b	d4                      ; Boot sector driver on another
+	beq.b	.quit                   ; machine: nothing to do
+
+	move.w	4(a6),d7                ; d7 = its "moveq #acsiid+command,d0"
+	move.b	mstecache.w,d5          ; d5 = state of the Mega STE cache
+	and.b	#$fe,mstecache.w        ; Turn it off while talking
+
+	bsr.w	query                   ; Check that the STM32 has the same
+	beq.b	.tkover                 ; protocol version as this driver
+
+	move.b	d5,mstecache.w          ; Set the Mega STE cache back
+	print	wrgver(pc)              ;
+.quit	Pterm0	                        ;
+
+.alrdy	print	alrdyin(pc)             ; Found XBRA marker in the chain,
+	Pterm0                          ; Don't install and quit now.
+
+.tkover	; Keep the private stack of the boot sector driver, which follows
+	; it: the STM32 knows where it is
+
+	lea	512+syshook.stksize-18(a6),a1
+	lea	syshook.stkptr(pc),a0   ;
+	move.l	a1,(a0)                 ;
+
+	; Replace the boot sector driver in the chain
+
+	move.l	-4(a6),(a3)             ; Unhook it
+	move.l	#'XBRA',(a5)+           ; Generate new interrupt vector
+	move.l	#XBRA,(a5)+             ;
+	move.l	(a3),(a5)+              ; Old vector
+	move.l	a5,(a3)                 ; Install new vector address
+	move.l	#$2F3AFFFA,(a5)+        ; "move.l oldvector(pc),-(sp)"
+	move.w	d7,(a5)+                ; d7 = "moveq #acsiid+command,d0"
+	move.w	d6,(a5)+                ; d6 = "bra.b syshook"
+	sub.w	#$0014,d6               ; A vector was written
+
+	print	tkover(pc)              ;
+	bra.w	.instok                 ;
+
+.notins	; GemDrive not installed
+	; Scan for devices and install the driver
+
+	lea	gemdos.vector.w,a3      ; a3 = gemdos vector address
+
+	tst.b	d4                      ;
+	beq.b	.test                   ;
 	move.b	mstecache.w,d5          ; d5 = state of the Mega STE cache
 	and.b	#$fe,mstecache.w        ; Turn it off while scanning
-	ENDC
 
 .test	; Test for ACSI device in d7
 
@@ -135,9 +209,10 @@ main	lea	stack,sp                ; Initialize stack
 
 .instok	sf	flock.w                 ; Unlock floppy controller
 
-	IFNE	MSTE
+	tst.b	d4                      ;
+	beq.b	.ncache                 ;
 	move.b	d5,mstecache.w          ; Set the Mega STE cache back
-	ENDC
+.ncache
 
 	cmp.w	#$6070,d6               ; Check if a vector was written
 	bne.b	.gores                  ; If yes, stay resident
@@ -151,10 +226,54 @@ main	lea	stack,sp                ; Initialize stack
 	move.l	#$100+(syshook.stack-start),-(sp) ; TSR memory size
 	gemdos	Ptermres                ; Terminate and stay resident
 
+query	; Ask the STM32 in d7 whether it has the same protocol version
+	; Returns d0 = 0 and Z set if it does
+	; Alters d0-d3, a0-a2
+
+	st	flock.w                 ; Lock floppy controller
+
+	moveq	#0,d0                   ; Clear command byte register
+	moveq	#5,d2                   ; 6 command bytes
+	lea	qrycmd(pc),a2           ; a2 = command buffer
+	bsr.w	syshook.setdmaaddr      ;
+	move.w	#$0088,(a1)             ; Switch to command.
+	move.b	d7,d0                   ; Device id to first command byte
+	and.b	#$e0,d0                 ;
+	or.b	(a2)+,d0                ; Read first command byte
+	moveq	#20,d3                  ; Short timeout
+.nxcmdb	move.w	d0,(a0)                 ;
+
+	moveq	#15,d1                  ; Let the STM32 release IRQ, see .test
+.settle	tst.b	gpip.w                  ;
+	dbra	d1,.settle              ;
+
+	move.l	d3,d1                   ; Set timeout
+	add.l	hz200.w,d1              ;
+.await	cmp.l	hz200.w,d1              ; Test timeout
+	bmi.b	.timout                 ;
+	btst.b	#5,gpip.w               ; Test command acknowledge
+	bne.b	.await                  ;
+
+	move.w	#$008a,(a1)             ; Disable A1
+	move.l	#600,d3                 ; Long timeout
+	move.b	(a2)+,d0                ; Next command byte
+	dbra	d2,.nxcmdb              ;
+
+	move.w	(a0),d0                 ; Read command/status byte
+	bra.b	.done                   ;
+
+.timout	moveq	#-1,d0                  ; No answer
+
+.done	sf	flock.w                 ; Unlock floppy controller
+	tst.b	d0                      ; 0 = same version
+	rts
+
 	; data
 	; The last letter is the hook protocol version: a driver and a firmware
 	; from different versions don't detect each other
+	; The second byte is 0 to start the driver, 1 to only check the version
 bootcmd	dc.b	BOOTCMD,$00,'G','D','R','2',0
+qrycmd	dc.b	BOOTCMD,$01,'G','D','R','2',0
 	even
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80
