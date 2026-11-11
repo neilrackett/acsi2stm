@@ -178,6 +178,39 @@ it injects some extra code and generates broken firmware. UART is the only
 supported way of programming/debugging ACSI2STM.
 
 
+Building with make
+------------------
+
+The Makefile builds the firmware in the container described by `Dockerfile`,
+without touching the source tree. Docker is used by default, add
+`DOCKER=podman` to use podman.
+
+    make image    # Build the container image, only needed once
+    make tt       # Generic firmware: ST, STE and TT
+    make mste     # Mega STE firmware
+
+`make st` is the same build as `make tt`: the TT-specific code only runs when
+the driver finds a 68030 or memory above ST-RAM.
+
+`make mste` builds the GemDrive driver with a workaround for the Mega STE,
+which hangs at 16MHz with its cache enabled: the cache is turned off while the
+driver talks to the unit. This firmware is for the Mega STE only. It doesn't
+check the machine and bombs on anything else.
+
+Each build goes to `build.tt` or `build.mste`:
+
+* `acsi2stm-XXXX.ino.bin` and `acsi2stm-XXXX-debug.ino.bin`: the firmware and
+  its debug variant.
+* `GEMDRIVE.PRG`: the matching driver. The firmware and `GEMDRIVE.PRG` must
+  always come from the same build: other versions don't detect each other.
+* `hddflash`: `HDDFLASH.TOS` with the firmware as `HDDFLASH.BIN`, ready to
+  flash from the Atari.
+
+The variant is selected by `MSTE` in `asm/GEMDRIVE/mste.i`. The file
+`acsi2stm/GEMDRIVE.boot.h` in the source tree is the generic driver, which is
+what the Arduino IDE builds.
+
+
 Programming the STM32
 ---------------------
 

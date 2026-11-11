@@ -7,6 +7,12 @@
 #    podman build -t acsi2stm .
 #    podman run --rm --mount type=bind,source=$PWD,target=/acsi2stm -t acsi2stm
 #
+# The Makefile wraps these commands and builds one target at a time:
+#
+#    make image
+#    make tt
+#    make mste
+#
 # How to cleanup images:
 #
 #    podman image rm acsi2stm
@@ -45,8 +51,9 @@ RUN arduino-cli config init && \
     arduino-cli lib update-index
 
 # Install Arduino libraries
+# SdFat is pinned: the Arduino_STM32 core doesn't compile with newer versions
 RUN arduino-cli core install arduino:mbed_rp2040 && \
-    arduino-cli lib install "SdFat - Adafruit Fork"
+    arduino-cli lib install "SdFat - Adafruit Fork@2.2.3"
 
 # Install Arduino_STM32
 RUN mkdir -p /root/Arduino/hardware/Arduino_STM32 && \
