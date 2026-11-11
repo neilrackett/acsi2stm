@@ -53,9 +53,16 @@ syshook:
 	beq.b	syshook.forward         ; some programs such as ICDFMT.PRG
 
 	cmpa.l	phystop.w,a2            ; DMA can't reach parameters above
+	IFNE	MSTE
+	bhs.b	syshook.forward         ; phystop: leave the call to TOS
+	ELSE
 	bhs.b	syshook.bounce          ; phystop (TT-RAM, Alt-RAM)
+	ENDC
 
 syshook.sendcmd:
+	IFNE	MSTE
+	bsr.b	syshook.msteoff         ; Turn the Mega STE cache off
+	ENDC
 	st	flock.w                 ; Lock floppy controller
 	bsr.w	syshook.setdmaaddr      ; Set DMA address on chip
 
@@ -75,7 +82,7 @@ syshook.reply:
 	move.w	(a0),d0                 ; Read command/status byte
 
 	cmp.b	#$9a,d0                 ; Check if command byte
-	beq.b	syshook.forward         ; Check command $9a (forward to TOS)
+	beq.b	syshook.fwdres          ; Check command $9a (forward to TOS)
 	blt.b	syshook.execcmd         ; Other commands with parameter
 
 .qret	ext.w	d0                      ; Quick return sign-extended d0
@@ -84,17 +91,41 @@ syshook.reply:
 	; Fall through syshook.return
 syshook.return:
 	; Return from interrupt
+	IFNE	MSTE
+	bsr.b	syshook.msteres         ; Set the Mega STE cache back
+	ENDC
 	sf	flock.w                 ; Unlock floppy controller
 	resreg	                        ; Restore registers
 	addq	#4,sp                   ; Pop forward address
 	rte	                        ; Return
 
+syshook.fwdres:
+	IFNE	MSTE
+	bsr.b	syshook.msteres         ; Set the Mega STE cache back
+	ENDC
 syshook.forward:
 	; Command $9a: forward the call to the next handler
 	sf	flock.w                 ; Unlock floppy controller
 	resreg	                        ; Restore registers
 syshook.rts
 	rts	                        ; Jump to forwarding address
+
+	IFNE	MSTE
+
+syshook.msteoff:
+	; Save the state of the Mega STE cache and turn it off
+	; Alters a0 only
+	lea	syshook.mstecst(pc),a0  ;
+	move.b	mstecache.w,(a0)        ; Save the cache register
+	and.b	#$fe,mstecache.w        ; Clear the cache enable bit
+	rts
+
+syshook.msteres:
+	; Set the Mega STE cache back to its saved state
+	move.b	syshook.mstecst(pc),mstecache.w
+	rts
+
+	ELSE
 
 syshook.bounce:
 	; Parameters are above phystop, out of DMA reach: send their address
@@ -115,6 +146,8 @@ syshook.bounce:
 	lea	syshook.stack(pc),sp    ; Switch to the private stack
 	subq.b	#1,d0                   ; Command $0d becomes $0c
 	bra.b	syshook.sendcmd         ;
+
+	ENDC
 
 syshook.init:
 	savereg	                        ; Save registers
@@ -176,7 +209,9 @@ syshook.execcmd:
 	dc.w	syshook.pshword-.jmptbl ; $92
 	dc.w	syshook.pushsp-.jmptbl  ; $94
 	dc.w	syshook.trap01-.jmptbl  ; $96
+	IFEQ	MSTE
 	dc.w	syshook.flush-.jmptbl   ; $98
+	ENDC
 
 syshook.pexec4:
 	; Command $88: Pexec4 and rte
@@ -190,6 +225,9 @@ syshook.pexec6:
 	; Fall through syshook.pexec
 
 syshook.pexec:
+	IFNE	MSTE
+	bsr.w	syshook.msteres         ; Set the Mega STE cache back
+	ENDC
 	sf	flock.w                 ; Unlock floppy controller
 
 	; Patch the current Pexec call, then forward
@@ -204,6 +242,7 @@ syshook.pexec:
 	resreg	                        ; Restore registers
 	rts	                        ; Forward to GEMDOS
 
+	IFEQ	MSTE
 syshook.flush:
 	; Command $98: clear 68020/68030 caches after DMA wrote to RAM
 	; Only sent by the STM32 to machines that have these caches
@@ -211,6 +250,7 @@ syshook.flush:
 	or.w	#$0808,d2               ; Clear data and instruction caches
 	dc.w	$4e7b,$2002             ; movec	d2,cacr
 	bra.b	syshook.dmanset         ; Continue in DMA write mode
+	ENDC
 
 syshook.rdlong:
 	move.l	d1,a0
@@ -324,6 +364,9 @@ syshook.setdmaaddr:
 
 ; Variables
 syshook.dmareg	dc.w	dmadata,dmactrl ; DMA port addresses
+	IFNE	MSTE
+syshook.mstecst	dc.w	0               ; Mega STE cache state (high byte)
+	ENDC
 	
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80

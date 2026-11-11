@@ -17,6 +17,10 @@ VERSION=`cat "$srcdir/../VERSION"`
 VASMFLAGS="-maxerrors=20 -devpac -ldots"
 VASMFLAGS="$VASMFLAGS -showopt"
 
+# Set MSTE=1 to build the Mega STE variant of the GemDrive driver
+# (see asm/GEMDRIVE/mste.i)
+[ "$MSTE" ] && VASMFLAGS="$VASMFLAGS -DMSTE=$MSTE"
+
 # Remove previous build artifacts and create a build directory
 rm -rf "$builddir"
 mkdir -p "$builddir"

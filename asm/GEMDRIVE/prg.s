@@ -18,6 +18,7 @@
 
 	incdir	..\inc\
 	include	tos.i
+	include	mste.i
 
 	opt	O+
 

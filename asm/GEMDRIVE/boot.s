@@ -16,6 +16,7 @@
 
 	incdir	..\inc\
 	include	tos.i
+	include	mste.i
 
 start:
 
@@ -38,7 +39,12 @@ syshook.bnbuf
 	; GEMDRIVE_boot_stack in GemDrive.cpp.
 syshook.stack	equ	start+512+syshook.stksize
 
-load	st	flock.w                 ; Lock floppy controller
+load
+	IFNE	MSTE
+	bsr.w	syshook.msteoff         ; Turn the Mega STE cache off
+	ENDC
+
+.load	st	flock.w                 ; Lock floppy controller
 
 	bsr.w	syshook.setdmaaddr      ; Reset DMA chip
 	move.w	#$0088,(a1)             ; Switch to command.
@@ -55,7 +61,11 @@ load	st	flock.w                 ; Lock floppy controller
 	move.w	(a0),d0                 ; Read command/status byte
 
 	tst.b	d0                      ; 0 = success
-	bne.b	load                    ; If not successful, retry
+	bne.b	.load                   ; If not successful, retry
+
+	IFNE	MSTE
+	bsr.w	syshook.msteres         ; Set the Mega STE cache back
+	ENDC
 
 	move.w	acsiid(pc),d0           ; Read acsi id
 	bra.w	syshook.init            ; Initialize

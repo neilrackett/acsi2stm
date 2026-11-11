@@ -61,6 +61,11 @@ main	lea	stack,sp                ; Initialize stack
 	move.w	#8,(a0)                 ; prmoff = 8
 .shrtfr
 
+	IFNE	MSTE
+	move.b	mstecache.w,d5          ; d5 = state of the Mega STE cache
+	and.b	#$fe,mstecache.w        ; Turn it off while scanning
+	ENDC
+
 .test	; Test for ACSI device in d7
 
 	st	flock.w                 ; Lock floppy controller
@@ -129,6 +134,10 @@ main	lea	stack,sp                ; Initialize stack
 	; Installation finished for all devices
 
 .instok	sf	flock.w                 ; Unlock floppy controller
+
+	IFNE	MSTE
+	move.b	d5,mstecache.w          ; Set the Mega STE cache back
+	ENDC
 
 	cmp.w	#$6070,d6               ; Check if a vector was written
 	bne.b	.gores                  ; If yes, stay resident
