@@ -91,18 +91,28 @@ main	lea	stack,sp                ; Initialize stack
 	cmp.b	#$60,6(a6)              ; "bra.b syshook": it's a GEMDRIVE.PRG
 	beq.b	.alrdy                  ;
 
+	IFEQ	DIAG
 	tst.b	d4                      ; Boot sector driver on another
 	beq.b	.quit                   ; machine: nothing to do
+	ENDC
 
 	move.w	4(a6),d7                ; d7 = its "moveq #acsiid+command,d0"
+	IFNE	DIAG
+	tst.b	d4                      ; The diagnostic driver takes over on
+	beq.b	.ask                    ; any machine
+	ENDC
 	move.b	mstecache.w,d5          ; d5 = state of the Mega STE cache
 	and.b	#$fe,mstecache.w        ; Turn it off while talking
 
-	bsr.w	query                   ; Check that the STM32 has the same
+.ask	bsr.w	query                   ; Check that the STM32 has the same
 	beq.b	.tkover                 ; protocol version as this driver
 
+	IFNE	DIAG
+	tst.b	d4                      ;
+	beq.b	.wrong                  ;
+	ENDC
 	move.b	d5,mstecache.w          ; Set the Mega STE cache back
-	print	wrgver(pc)              ;
+.wrong	print	wrgver(pc)              ;
 .quit	Pterm0	                        ;
 
 .alrdy	print	alrdyin(pc)             ; Found XBRA marker in the chain,

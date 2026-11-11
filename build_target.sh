@@ -32,13 +32,33 @@ case "$target" in
     export MSTE=1
     version="${version%-tt}-mste"
     ;;
+  diag)
+    # Diagnostic GEMDRIVE.PRG only, for the generic firmware: it says what
+    # it is waiting for when the unit doesn't answer
+    export DIAG=1
+    ;;
   *)
-    echo "Usage: $0 tt|mste"
+    echo "Usage: $0 tt|mste|diag"
     exit 1
     ;;
 esac
 
 set -e
+
+if [ "$target" = diag ]; then
+  workdir="$(mktemp -d)"
+  cp -r "$srcdir/asm" "$srcdir/acsi2stm" "$srcdir/build_asm.sh" "$srcdir/VERSION" "$workdir/"
+  mkdir "$workdir/tools"
+  (
+    cd "$workdir/tools"
+    "$workdir/build_asm.sh" > "$workdir/build_asm.log" 2>&1
+  ) || { cat "$workdir/build_asm.log"; exit 1; }
+  mkdir -p "$outdir"
+  cp "$workdir/tools/GEMDRIVE.PRG" "$outdir/GDDIAG.PRG"
+  echo "Diagnostic driver: $outdir/GDDIAG.PRG"
+  rm -r "$workdir"
+  exit 0
+fi
 
 # The Arduino_STM32 core doesn't compile with newer versions of SdFat
 if ! arduino-cli lib list | grep -q 'SdFat - Adafruit Fork *2\.2\.3'; then

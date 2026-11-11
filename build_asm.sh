@@ -21,6 +21,9 @@ VASMFLAGS="$VASMFLAGS -showopt"
 # (see asm/GEMDRIVE/mste.i)
 [ "$MSTE" ] && VASMFLAGS="$VASMFLAGS -DMSTE=$MSTE"
 
+# Set DIAG=1 to build the diagnostic variant of GEMDRIVE.PRG
+[ "$DIAG" ] && VASMFLAGS="$VASMFLAGS -DDIAG=$DIAG"
+
 # Remove previous build artifacts and create a build directory
 rm -rf "$builddir"
 mkdir -p "$builddir"

@@ -36,6 +36,13 @@
 MSTE	equ	0                       ; Generic driver by default
 	ENDC
 
+	; DIAG builds a diagnostic GEMDRIVE.PRG ("make diag"): it replaces the
+	; boot sector driver on any machine, and when the STM32 doesn't answer
+	; it prints on the console what it is waiting for.
+	IFND	DIAG
+DIAG	equ	0                       ; Normal driver by default
+	ENDC
+
 mstecache	equ	$ffff8e21       ; Cache and CPU speed register
 mstemch	equ	$00010010               ; _MCH cookie of the Mega STE
 

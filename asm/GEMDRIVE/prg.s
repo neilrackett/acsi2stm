@@ -55,7 +55,11 @@ syshook.stack	equ	syshook.end+syshook.stksize
 
 	; Strings
 alrdyin	dc.b	7,'GemDrive already installed',13,10,0
+	IFNE	DIAG
+tkover	dc.b	'GemDrive: diagnostic driver installed',13,10,0
+	ELSE
 tkover	dc.b	'GemDrive: Mega STE driver installed',13,10,0
+	ENDC
 wrgver	dc.b	7,'GEMDRIVE.PRG and firmware versions differ',13,10,0
 devnfnd	dc.b	'No GemDrive device detected',13,10,0
 nostram	dc.b	7,'GemDrive must load in ST-RAM',13,10,0

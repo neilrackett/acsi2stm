@@ -43,6 +43,7 @@ syshook.stksize	equ	2048
 	; 68030 and TT-RAM need.
 syshook.mstefix	equ	MSTE+PRG        ; Not 0: cache workaround built in
 syshook.nott	equ	MSTE*(1-PRG)    ; Not 0: 68030 and TT-RAM code left out
+syshook.diag	equ	DIAG*PRG        ; Not 0: diagnostic GEMDRIVE.PRG
 
 syshook:
 	; Initialize registers for hook subroutines
@@ -56,6 +57,12 @@ syshook:
 	savereg	                        ; Save registers
 
 	bsr.w	syshook.setprm          ; Set a2 (DMA address) at the parameters
+
+	IFNE	syshook.diag
+	lea	syshook.diagop(pc),a0   ; Remember the GEMDOS opcode
+	move.w	(a2),(a0)               ;
+	btst	#5,4+spoff(sp)          ; Test supervisor mode again
+	ENDC
 
 	IFEQ	syshook.nott
 	bne.b	syshook.bounce          ; Supervisor mode: use the private stack
@@ -72,8 +79,12 @@ syshook:
 	ENDC
 
 syshook.sendcmd:
+	IFNE	syshook.diag
+	bsr.w	syshook.msteoff         ; Turn the Mega STE cache off
+	ELSE
 	IFNE	syshook.mstefix
 	bsr.b	syshook.msteoff         ; Turn the Mega STE cache off
+	ENDC
 	ENDC
 	st	flock.w                 ; Lock floppy controller
 	bsr.w	syshook.setdmaaddr      ; Set DMA address on chip
@@ -87,15 +98,27 @@ syshook.sendcmd:
 syshook.reply:
 	; Handle single byte reply
 
+	IFNE	syshook.diag
+	btst.b	#5,gpip.w               ; Same first test as the normal driver
+	beq.b	.acked                  ;
+	moveq	#8,d2                   ; Then wait for IRQ low, and report
+	bsr.w	syshook.diagwait        ; while it doesn't come
+.acked
+	ELSE
 .await	btst.b	#5,gpip.w               ; Wait for acknowledge on IRQ
 	bne.b	.await                  ;
+	ENDC
 
 	move.w	#$008a,(a1)             ; Prepare to read command/status
 	move.w	(a0),d0                 ; Read command/status byte
 
 	cmp.b	#$9a,d0                 ; Check if command byte
 	beq.b	syshook.fwdres          ; Check command $9a (forward to TOS)
+	IFNE	syshook.diag
+	blt.w	syshook.execcmd         ; Other commands with parameter
+	ELSE
 	blt.b	syshook.execcmd         ; Other commands with parameter
+	ENDC
 
 .qret	ext.w	d0                      ; Quick return sign-extended d0
 	ext.l	d0                      ;
@@ -163,8 +186,16 @@ syshook.bncend:
 
 syshook.init:
 	savereg	                        ; Save registers
+	IFNE	syshook.diag
+	lea	syshook.diagop(pc),a0   ; No GEMDOS call in flight
+	move.w	#$ffff,(a0)             ;
+	ENDC
 	and.w	#$00e0,d0               ; Send "init ok" command
+	IFNE	syshook.diag
+	bra.w	syshook.sendcmd
+	ELSE
 	bra.b	syshook.sendcmd
+	ENDC
 
 	IFNE	syshook.mstefix
 
@@ -203,7 +234,11 @@ syshook.setprm:
 syshook.rte
 	; Command $80: Return long from exception
 	move.l	d1,d0                   ; Put parameter in d0
+	IFNE	syshook.diag
+	bra.w	syshook.return          ; Return from exception
+	ELSE
 	bra.b	syshook.return          ; Return from exception
+	ENDC
 
 syshook.execcmd:
 	; Received a command in d0
@@ -217,7 +252,13 @@ syshook.execcmd:
 	lsr.b	#5,d0                   ; lowest bit of the byte counter
 	eor.b	d2,d0                   ;
 	lsr.b	#1,d0                   ;
+	IFNE	syshook.diag
+	bcc.b	.rdnow                  ;
+	bsr.w	syshook.diagwait        ; Not yet: wait and report
+.rdnow
+	ELSE
 	bcs.b	.rdbyte                 ;
+	ENDC
 	move.w	(a0),d0                 ; Read the byte
 	lsl.l	#8,d1                   ;
 	move.b	d0,d1                   ;
@@ -391,8 +432,89 @@ syshook.setdmaaddr:
 
 	rts
 
+	IFNE	syshook.diag
+
+syshook.diagwait:
+	; Diagnostic build: wait until IRQ (gpip bit 5) equals bit 0 of d2, like
+	; the code that calls it, and report on the console every 10 seconds.
+	; d2 is 8 when waiting for a reply, 3 to 0 for a parameter byte.
+	movem.l	d0-d1,-(sp)             ;
+.again	move.l	#10*200,d1              ; 10 seconds
+	add.l	hz200.w,d1              ;
+.poll	move.b	gpip.w,d0               ;
+	lsr.b	#5,d0                   ;
+	eor.b	d2,d0                   ;
+	lsr.b	#1,d0                   ;
+	bcc.b	.done                   ;
+	cmp.l	hz200.w,d1              ;
+	bpl.b	.poll                   ;
+	bsr.b	syshook.diagrep         ;
+	bra.b	.again                  ;
+.done	movem.l	(sp)+,d0-d1             ;
+	rts
+
+syshook.diagrep:
+	; Print the GEMDOS opcode in flight, the last hook command and the wait.
+	; Called by syshook.diagwait, whose saved d0 is above the return address.
+	; The BIOS alters d0-d2/a0-a2 only.
+	movem.l	d0-d4/a0-a3,-(sp)       ;
+	lea	syshook.diagmsg(pc),a3  ;
+	bsr.b	.puts                   ; "GemDrive waiting: op="
+	move.w	syshook.diagop(pc),d3   ;
+	moveq	#3,d4                   ;
+	bsr.b	.hex                    ;
+	bsr.b	.puts                   ; " cmd="
+	move.l	40(sp),d3               ; d0 of the waiting code
+	cmp.b	#8,11(sp)               ; d2: waiting for a reply ?
+	beq.b	.inlow                  ;
+	swap	d3                      ; Else the command is in the upper word
+.inlow	lsl.w	#8,d3                   ;
+	moveq	#1,d4                   ;
+	bsr.b	.hex                    ;
+	bsr.b	.puts                   ; " wait="
+	move.l	8(sp),d3                ; d2
+	ror.w	#4,d3                   ;
+	moveq	#0,d4                   ;
+	bsr.b	.hex                    ;
+	bsr.b	.puts                   ; End of line
+	movem.l	(sp)+,d0-d4/a0-a3       ;
+	rts
+
+.hex	rol.w	#4,d3                   ; Print d4+1 hex digits from the top
+	moveq	#$0f,d0                 ; of d3.w
+	and.w	d3,d0                   ;
+	move.b	.digits(pc,d0.w),d0     ;
+	bsr.b	.putc                   ;
+	dbra	d4,.hex                 ;
+	rts
+
+.puts	move.b	(a3)+,d0                ; Print the string in a3 up to its
+	beq.b	.rts                    ; zero, leave a3 after it
+	bsr.b	.putc                   ;
+	bra.b	.puts                   ;
+
+.putc	and.w	#$00ff,d0               ; Bconout to the console
+	move.w	d0,-(sp)                ;
+	move.w	#2,-(sp)                ;
+	move.w	#3,-(sp)                ;
+	trap	#13                     ;
+	addq.l	#6,sp                   ;
+.rts	rts
+
+.digits	dc.b	'0123456789ABCDEF'
+syshook.diagmsg	dc.b	13,10,'GemDrive waiting: op=',0
+	dc.b	' cmd=',0
+	dc.b	' wait=',0
+	dc.b	13,10,0
+	even
+
+	ENDC
+
 ; Variables
 syshook.dmareg	dc.w	dmadata,dmactrl ; DMA port addresses
+	IFNE	syshook.diag
+syshook.diagop	dc.w	0               ; GEMDOS opcode of the call in flight
+	ENDC
 	IFNE	syshook.mstefix
 syshook.mstecst	dc.w	0               ; Mega STE cache state (high byte)
 	ENDC
