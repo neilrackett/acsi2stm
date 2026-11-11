@@ -25,9 +25,33 @@ this version.
 
 See [RELEASE NOTES](release_notes.md) for details about the current version.
 
-**Final version:** Both software and hardware parts are considered finished, the
-project is now mature. Feedback is still welcome and occasional bug fixes may be
-released.
+
+Version 5.1b-tt
+---------------
+
+This is a custom version of the ACSI2STM firmware by
+[Neil Rackett](https://neilrackett.com/atarist).
+
+This version includes additional features and improvements over the final
+version (5.0) of the [official firmware](https://github.com/retro16/acsi2stm/),
+including:
+
+* Support for MiNT extended calls (Frename, Fdatime, Fxattr)
+* GemDrive for Atari TT: self-boot and `GEMDRIVE.PRG` with 68030 caches enabled
+* Supports programs running from TT/Alt-RAM, including in supervisor mode
+* Mega STE at 16MHz with cache enabled: put `GEMDRIVE.PRG` in the `AUTO`
+  folder, or flash the Mega STE build
+  ([cache workaround by tin-nl](https://github.com/tin-nl/acsi2stm/releases/tag/5.1tin))
+* One unit and one firmware shared between ST, STE, Mega STE and TT
+* Handshaked driver protocol that no longer depends on CPU speed
+* Programs with more than 127K of BSS load correctly
+* Directory searches survive programs that clear the DTA file name, such as
+  BUGABOO (fix by tin-nl)
+* The unit no longer disturbs the ACSI bus when a hard disk driver probes the
+  GemDrive id
+* `make tt` and `make mste` build both firmwares in a container
+* Everything from the official 5.1b pre-release: correct clock setting in
+  GemDrive mode, program loading fixes, Super Compact PCB
 
 
 Documentation
