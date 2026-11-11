@@ -1,5 +1,7 @@
 /* ACSI2STM Atari hard drive emulator
  * Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+ * Copyright (C) 2026 by Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,20 +40,24 @@ void SysHook::sendAt(uint32_t address, const uint8_t *bytes, int count)
 
 #if ! ACSI_PIO
   if(count < 16 || !isDma(address + count - 1)) {
-    // Indirect copy
+    // Indirect copy: upload a byte count and the data on the ST stack, then
+    // let the ST copy them. Big pieces for big copies, because programs in
+    // TT-RAM read whole files this way. Small ones keep the stack use low.
+    const int pieceSize = count > 30 ? 256 : 32;
 
-    shiftStack(-32);
-
-    uint8_t data[32];
+    shiftStack(-pieceSize);
 
     while(count > 0) {
-      int c = count > 30 ? 30 : count;
+      int c = count > pieceSize - 2 ? pieceSize - 2 : count;
       Word dCount = ToWord(c - 1);
-      data[0] = dCount.bytes[0];
-      data[1] = dCount.bytes[1];
-      memcpy(&data[2], bytes, c);
       shiftStack(0);
-      sendDma(data, 32);
+      send(dCount);
+      sendDma(bytes, c);
+      if((c + 2) & 0xf) {
+        // The ST only stores DMA data by blocks of 16 bytes
+        uint8_t padding[0xf];
+        sendDma(padding, 16 - ((c + 2) & 0xf));
+      }
       copyFromStack(address);
 
       address += c;
@@ -59,7 +65,7 @@ void SysHook::sendAt(uint32_t address, const uint8_t *bytes, int count)
       count -= c;
     }
 
-    shiftStack(32);
+    shiftStack(pieceSize);
     return;
   }
 
@@ -180,23 +186,34 @@ void SysHook::clearAt(uint32_t bytes, uint32_t address) {
 
 #if ! ACSI_PIO
   if(!isDma(address + bytes - 1)) {
+    // Out of DMA reach (TT-RAM, Alt-RAM): the ST copies zeros from its
+    // stack. A whole TPA can be megabytes, so copy big pieces and push the
+    // byte count only when it changes: one hook command per piece.
+    static const uint32_t pieceSize = 128;
+
     // Upload some blank bytes on the stack
-    shiftStack(-32);
-    sendDma(blank, 32);
+    shiftStack(-(int)pieceSize);
+    for(uint32_t i = 0; i < pieceSize; i += sizeof(blank))
+      sendDma(blank, sizeof(blank));
 
+    int pushed = 0;
     while(bytes > 0) {
-      int c = bytes > 32 ? 32 : bytes;
+      int c = bytes > pieceSize ? pieceSize : bytes;
 
-      push(ToWord(c - 1));
+      if(c != pushed) {
+        if(pushed)
+          shiftStack(2);
+        push(ToWord(c - 1));
+        pushed = c;
+      }
       copyFromStack(address);
-      shiftStack(2);
 
       address += c;
       bytes -= c;
     }
 
     // Free data from stack
-    shiftStack(32);
+    shiftStack((int)pieceSize + (pushed ? 2 : 0));
 
     return;
   }
@@ -219,6 +236,7 @@ void SysHook::clearAt(uint32_t bytes, uint32_t address) {
       chunk = maxDmaFill;
     setDmaRead(address);
     DmaPort::fillDma(0, chunk);
+    cacheDirty = true;
     address += chunk;
     bytes -= chunk;
   }
@@ -269,6 +287,7 @@ void SysHook::sendDma(const uint8_t *bytes, int count)
   DmaPort::sendIrqFast(bytes, count);
 #else
   DmaPort::sendDma(bytes, count);
+  cacheDirty = true;
 #endif
 }
 
@@ -378,6 +397,9 @@ end_of_string:
 // Low level hook commands implementation
 
 void SysHook::rte(int8_t value) {
+#if ! ACSI_PIO
+  restoreStack();
+#endif
   if(value <= (int8_t)0x9a)
     rte(ToLong(value));
   dbgHex("rte(", (uint32_t)(uint8_t)value, ") ");
@@ -385,6 +407,9 @@ void SysHook::rte(int8_t value) {
 }
 
 void SysHook::forward() {
+#if ! ACSI_PIO
+  restoreStack();
+#endif
   dbg("forward ");
   DmaPort::sendIrq(0x9a);
 }
@@ -418,10 +443,16 @@ void SysHook::readLongToStack(ToLong address) {
 }
 
 void SysHook::pexec4ThenRte(ToLong pd) {
+#if ! ACSI_PIO
+  restoreStack();
+#endif
   sendCommandNoWait(0x88, pd);
 }
 
 void SysHook::pexec6ThenRte(ToLong pd) {
+#if ! ACSI_PIO
+  restoreStack();
+#endif
   sendCommandNoWait(0x86, pd);
 }
 
@@ -446,6 +477,9 @@ void SysHook::copyToStack(ToLong address)
 }
 
 void SysHook::rte(ToLong value) {
+#if ! ACSI_PIO
+  restoreStack();
+#endif
   dbgHex("rte(", (uint32_t)value, ") ");
   sendCommandNoWait(0x80, value);
 }
@@ -464,14 +498,53 @@ void SysHook::sendCommand(int command, ToLong param)
 
 void SysHook::sendCommandNoWait(int command, ToLong param)
 {
+#if ! ACSI_PIO
+  // Flush before commands that make the ST read memory. Not needed for
+  // $84/$85 (set DMA), $90/$91 (shift stack), $92 (push), $94 (push sp) and
+  // $98 (the flush itself): one bit per command pair, starting at $80.
+  if(!((0x1704 >> ((command - 0x80) >> 1)) & 1))
+    syncCache();
+#endif
   uint8_t bytes[5];
   bytes[0] = command;
   bytes[1] = param.bytes[0];
   bytes[2] = param.bytes[1];
   bytes[3] = param.bytes[2];
   bytes[4] = param.bytes[3];
+#if ACSI_PIO
   DmaPort::sendIrqFast(bytes, 5);
+#else
+  DmaPort::sendIrqToggle(bytes, 5);
+#endif
 }
+
+#if ! ACSI_PIO
+void SysHook::syncCache() {
+  // The 68030 caches don't see DMA writes to ST RAM. Before the ST reads
+  // anything DMA wrote (stack data, buffers, loaded code), clear them.
+  if(cacheFlush && cacheDirty) {
+    cacheDirty = false;
+    sendCommand(0x98, 0);
+  }
+}
+
+void SysHook::restoreStack() {
+  // Flush first: the flush command sets DMA at the last address used, which
+  // must not be the caller's stack since DMA can't reach it.
+  syncCache();
+  if(callerSp) {
+    // All that was pushed has been popped: sp is at the private stack top
+    uint32_t offset = callerSp - privateSp;
+    callerSp = 0;
+    shiftStack(offset);
+  }
+}
+
+bool SysHook::cacheFlush = false;
+bool SysHook::cacheDirty = false;
+uint32_t SysHook::callerSp = 0;
+uint32_t SysHook::privateSp = 0;
+#endif
 
 uint32_t SysHook::dmatop = 0x40000; // Default to 256k (minimum ST-RAM)
 

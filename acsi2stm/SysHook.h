@@ -369,6 +369,27 @@ struct SysHook: public Monitor {
   // Wait for a dummy command byte that indicates command completion
   static void waitCommand();
 
+#if ! ACSI_PIO
+  // Clear the ST CPU caches if DMA wrote to ST RAM since the last time
+  static void syncCache();
+
+  // Set if the ST CPU caches don't see DMA writes (68030)
+  static bool cacheFlush;
+
+  // Set when DMA wrote to ST RAM
+  static bool cacheDirty;
+
+  // If the driver switched to its private stack for this call, go back to
+  // the caller's stack. Must be done before leaving the call.
+  static void restoreStack();
+
+  // Caller's stack pointer while the driver runs on its private stack, else 0
+  static uint32_t callerSp;
+
+  // Top of the driver's private stack
+  static uint32_t privateSp;
+#endif
+
   // Send a command and wait for completion
   static void sendCommand(int command, ToLong param);
 

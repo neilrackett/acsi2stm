@@ -1,5 +1,7 @@
 ; ACSI2STM Atari hard drive emulator
 ; Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+; Copyright (C) 2026 by Neil Rackett
+; SPDX-License-Identifier: GPL-3.0-or-later
 
 ; This program is free software: you can redistribute it and/or modify
 ; it under the terms of the GNU General Public License as published by
@@ -31,6 +33,9 @@ resreg	macro
 	; Stack offset introduced by savereg
 spoff	equ	5*4
 
+	; Size of the private stack, see syshook.bounce
+syshook.stksize	equ	2048
+
 syshook:
 	; Initialize registers for hook subroutines
 	; Input:
@@ -46,6 +51,9 @@ syshook:
 
 	cmp.w	#$0020,(a2)             ; Don't hook Super because it breaks
 	beq.b	syshook.forward         ; some programs such as ICDFMT.PRG
+
+	cmpa.l	phystop.w,a2            ; DMA can't reach parameters above
+	bhs.b	syshook.bounce          ; phystop (TT-RAM, Alt-RAM)
 
 syshook.sendcmd:
 	st	flock.w                 ; Lock floppy controller
@@ -88,6 +96,26 @@ syshook.forward:
 syshook.rts
 	rts	                        ; Jump to forwarding address
 
+syshook.bounce:
+	; Parameters are above phystop, out of DMA reach: send their address
+	; with command $0d instead. The STM32 then fetches exactly the bytes it
+	; needs through the supervisor stack.
+	; If that stack is out of reach too (supervisor mode program in TT-RAM),
+	; switch to a private one and send the caller's sp with command $0c:
+	; the STM32 sets it back before leaving. The saved registers and the
+	; exception frame stay on the caller's stack.
+	lea	syshook.bnbuf(pc),a0    ; Store the parameters address in
+	move.l	a2,(a0)                 ; ST-RAM
+	move.l	a0,a2                   ; Point DMA at it
+	subq.b	#1,d0                   ; Command $0e becomes $0d
+	cmpa.l	phystop.w,sp            ; Check the supervisor stack
+	blo.b	syshook.sendcmd         ;
+
+	move.l	sp,4(a0)                ; Store the caller's sp
+	lea	syshook.stack(pc),sp    ; Switch to the private stack
+	subq.b	#1,d0                   ; Command $0d becomes $0c
+	bra.b	syshook.sendcmd         ;
+
 syshook.init:
 	savereg	                        ; Save registers
 	and.w	#$00e0,d0               ; Send "init ok" command
@@ -107,13 +135,25 @@ syshook.setprm:
 .usp	move	usp,a2                  ; Point at USP directly
 	rts
 
+syshook.rte
+	; Command $80: Return long from exception
+	move.l	d1,d0                   ; Put parameter in d0
+	bra.b	syshook.return          ; Return from exception
+
 syshook.execcmd:
 	; Received a command in d0
 
 	; Read parameter (4 bytes) into d1
+	; The STM32 flips IRQ when each byte is on the bus: high for the 1st
+	; and 3rd, low for the 2nd and 4th. No CPU speed assumption.
 	swap	d0                      ; Save command byte into upper d0
 	moveq	#3,d2                   ; Repeat 4 times
-.rdbyte	move.w	(a0),d0                 ; Fast byte read (no ack)
+.rdbyte	move.b	gpip.w,d0               ; Wait until IRQ (bit 5) matches the
+	lsr.b	#5,d0                   ; lowest bit of the byte counter
+	eor.b	d2,d0                   ;
+	lsr.b	#1,d0                   ;
+	bcs.b	.rdbyte                 ;
+	move.w	(a0),d0                 ; Read the byte
 	lsl.l	#8,d1                   ;
 	move.b	d0,d1                   ;
 	dbra	d2,.rdbyte              ;
@@ -136,11 +176,7 @@ syshook.execcmd:
 	dc.w	syshook.pshword-.jmptbl ; $92
 	dc.w	syshook.pushsp-.jmptbl  ; $94
 	dc.w	syshook.trap01-.jmptbl  ; $96
-
-syshook.rte
-	; Command $80: Return long from exception
-	move.l	d1,d0                   ; Put parameter in d0
-	bra.b	syshook.return          ; Return from exception
+	dc.w	syshook.flush-.jmptbl   ; $98
 
 syshook.pexec4:
 	; Command $88: Pexec4 and rte
@@ -167,6 +203,14 @@ syshook.pexec:
 
 	resreg	                        ; Restore registers
 	rts	                        ; Forward to GEMDOS
+
+syshook.flush:
+	; Command $98: clear 68020/68030 caches after DMA wrote to RAM
+	; Only sent by the STM32 to machines that have these caches
+	dc.w	$4e7a,$2002             ; movec	cacr,d2
+	or.w	#$0808,d2               ; Clear data and instruction caches
+	dc.w	$4e7b,$2002             ; movec	d2,cacr
+	bra.b	syshook.dmanset         ; Continue in DMA write mode
 
 syshook.rdlong:
 	move.l	d1,a0
@@ -196,11 +240,9 @@ syshook.pushsp:
 	bra.b	syshook.dmasp
 
 syshook.trap01:
-	lea	syshook.oldd0(pc),a0
-	move.l	d0,(a0)
 	trap	#01
 	move.l	d0,-(sp)
-	move.l	syshook.oldd0(pc),d0
+	moveq	#0,d0                   ; Even like $96: DMA write in dmanset
 syshook.dmasp:
 	move.l	sp,d1
 
@@ -282,7 +324,6 @@ syshook.setdmaaddr:
 
 ; Variables
 syshook.dmareg	dc.w	dmadata,dmactrl ; DMA port addresses
-syshook.oldd0	ds.l	1               ; Temporary storage for d0
 	
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80

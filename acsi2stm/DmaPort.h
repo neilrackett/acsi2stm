@@ -70,6 +70,11 @@ struct DmaPort {
   // This is used for the GEMDOS protocol.
   static void sendIrqFast(const uint8_t *bytes, int count);
 
+  // Send many bytes, flipping IRQ each time the next byte is on the bus.
+  // The ST waits for each flip, so its CPU speed doesn't matter.
+  // This is used for GEMDOS protocol commands in DMA mode.
+  static void sendIrqToggle(const uint8_t *bytes, int count);
+
   // Repeat a byte using the fast IRQ/CS method.
   // This is used for the GEMDOS protocol.
   static void repeatIrqFast(uint8_t byte, int count);

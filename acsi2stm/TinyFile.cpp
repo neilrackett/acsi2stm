@@ -24,7 +24,6 @@
 #include "TinyFile.h"
 
 TinyFile::TinyFile() : index(0) {
-
 }
 
 void TinyFile::set(uint16_t mediaId_, FsFile &parent, FsFile &file) {

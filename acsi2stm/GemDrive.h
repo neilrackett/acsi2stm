@@ -94,13 +94,16 @@ struct TOS_PACKED GemPattern {
 struct TOS_PACKED GemDriveDTA {
   TinyFile file;
   uint8_t attribMask;
-  uint8_t unused;
+  uint8_t magic; // MAGIC if the DTA belongs to GemDrive
   GemPattern pattern;
   uint8_t d_attrib;
   Word d_time;
   Word d_date;
   Long d_length;
   char d_fname[14];
+
+  // Never part of a file name, so never in a search pattern set by TOS
+  static const uint8_t MAGIC = 0x0e;
 };
 
 struct GemPath: public FsFile {
@@ -170,6 +173,7 @@ struct GemDrive: public Devices, public Tos {
   // External events
   static void onBoot();
   static void onInit(bool setBootDrive = false);
+  static void initSystem();
   static void onGemdos();
 
   // GEMDOS processing
@@ -266,6 +270,10 @@ struct GemDrive: public Devices, public Tos {
   static Word os_conf;
   static Long p_run;
   static Long bootBasePage;
+
+  // Address of the current GEMDOS call parameters if they are out of DMA
+  // reach, 0 if they come through DMA
+  static uint32_t paramAddr;
 
   // Mounted drive variables
   SdDev &sd; // Pointer to the low-level SD card descriptor

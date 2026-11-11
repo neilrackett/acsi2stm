@@ -40,16 +40,19 @@ start	bra.w	main                    ; Initialization is in the freed zone
 	include	syshook.s
 
 prmoff	dc.w	$0006                   ; Detected during initialization
+syshook.bnbuf	ds.l	2               ; See syshook.bounce
 
 syshook.end
 	; Freed zone: everything after this is freed when the driver is made
-	; resident.
+	; resident, then reused as the private stack (see syshook.bounce).
+syshook.stack	equ	syshook.end+syshook.stksize
 
 	include	init.s
 
 	; Strings
 alrdyin	dc.b	7,'GemDrive already installed',13,10,0
 devnfnd	dc.b	'No GemDrive device detected',13,10,0
+nostram	dc.b	7,'GemDrive must load in ST-RAM',13,10,0
 	even
 
 	bss

@@ -397,6 +397,48 @@ void DmaPort::sendIrqFast(const uint8_t *bytes, int count) {
   Acsi::verboseHex("]");
 }
 
+void DmaPort::sendIrqToggle(const uint8_t *bytes, int count) {
+  resetTimeout();
+
+  Acsi::verboseHex("[}");
+
+  // Disable systick that introduces jitter.
+  systick_disable();
+
+  // Output the first byte and signal it by pulling IRQ, as usual
+  acquireDataBus();
+  writeData(*bytes);
+
+  armCs();
+  pullIrq();
+  waitCs();
+
+  // Signal each following byte by flipping IRQ, only once the byte is on the
+  // bus and CS is armed: released for odd bytes, pulled for even ones.
+  for(int i = 1; i < count; ++i) {
+    writeData(bytes[i]);
+    armCs();
+    if(i & 1)
+      releaseRq();
+    else
+      pullIrq();
+    waitCs();
+  }
+
+  // Go back to the idle state
+  releaseRq();
+  releaseDataBus();
+  waitIrqUp();
+  armA1();
+
+  // Restore systick
+  systick_enable();
+
+  Acsi::verboseDump(bytes, count);
+
+  Acsi::verboseHex("]");
+}
+
 void DmaPort::repeatIrqFast(uint8_t byte, int count) {
   resetTimeout();
 

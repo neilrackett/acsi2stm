@@ -1,5 +1,7 @@
 ; ACSI2STM Atari hard drive emulator
 ; Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+; Copyright (C) 2026 by Neil Rackett
+; SPDX-License-Identifier: GPL-3.0-or-later
 
 ; This program is free software: you can redistribute it and/or modify
 ; it under the terms of the GNU General Public License as published by
@@ -15,7 +17,7 @@
 ; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ; PRG loader for the GemDrive system hook
-; Initialization code - shared with GEMDRPIO
+; Initialization code - GEMDRPIO has its own copy
 
 main	lea	stack,sp                ; Initialize stack
 
@@ -37,7 +39,15 @@ main	lea	stack,sp                ; Initialize stack
 	bra.b	.nxtvec                 ;
 
 .notins	; GemDrive not installed
-	; Scan for devices and install the driver
+
+	lea	start(pc),a0            ; DMA must reach the resident driver:
+	cmpa.l	phystop.w,a0            ; refuse to run from TT-RAM or Alt-RAM
+	blo.b	.stram                  ;
+
+	print	nostram(pc)             ;
+	Pterm0	                        ;
+
+.stram	; Scan for devices and install the driver
 
 	move.w	#$700e,d7               ; d7 = pre-shifted ACSI id and moveq
 	lea	start-$80(pc),a5        ; a5 = handler generator pointer
@@ -66,6 +76,10 @@ main	lea	stack,sp                ; Initialize stack
 	moveq	#20,d3                  ; Short timeout
 .nxcmdb	move.w	d0,(a0)                 ;
 
+	moveq	#15,d1                  ; Let the STM32 release IRQ from the
+.settle	tst.b	gpip.w                  ; previous byte before polling it. Bus
+	dbra	d1,.settle              ; accesses take as long on any CPU.
+
 	move.l	d3,d1                   ; Set timeout
 	add.l	hz200.w,d1              ;
 .await	cmp.l	hz200.w,d1              ; Test timeout
@@ -86,7 +100,11 @@ main	lea	stack,sp                ; Initialize stack
 	; All good, found device in d7
 
 	; Enter syshook mode to run onInit on the STM32
+	; It first reads the address of the private stack through DMA
 
+	lea	syshook.bnbuf(pc),a2    ; Set DMA at the private stack address
+	lea	syshook.stack(pc),a0    ;
+	move.l	a0,(a2)                 ;
 	move.b	d7,d0                   ;
 	bsr	syshook.init
 
@@ -106,7 +124,7 @@ main	lea	stack,sp                ; Initialize stack
 
 .nxtid	add.b	#$20,d7                 ; Point at next ACSI id
 	cmp.b	#$20,d7                 ;
-	bhi.b	.test                   ; Try next ACSI id
+	bhi.w	.test                   ; Try next ACSI id
 
 	; Installation finished for all devices
 
@@ -121,11 +139,13 @@ main	lea	stack,sp                ; Initialize stack
 .gores	; Shrink memory usage, terminate and stay resident
 
 	clr.w	-(sp)                   ; TSR return code
-	move.l	#$100+(syshook.end-start),-(sp) ; TSR memory size
+	move.l	#$100+(syshook.stack-start),-(sp) ; TSR memory size
 	gemdos	Ptermres                ; Terminate and stay resident
 
 	; data
-bootcmd	dc.b	BOOTCMD,$00,'G','D','R','V',0
+	; The last letter is the hook protocol version: a driver and a firmware
+	; from different versions don't detect each other
+bootcmd	dc.b	BOOTCMD,$00,'G','D','R','2',0
 	even
 
 ; vim: ff=dos ts=8 sw=8 sts=8 noet colorcolumn=8,41,81 ft=asm68k tw=80

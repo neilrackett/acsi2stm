@@ -29,6 +29,15 @@ acsiid	moveq	#$0e,d0                 ; Set command (patched by code)
 
 	include	syshook.s               ; Enter syshook mode
 
+	; The resident copy never runs load: its first 8 bytes hold the address
+	; of GEMDOS parameters that DMA can't reach and the caller's sp (see
+	; syshook.bounce)
+syshook.bnbuf
+
+	; Top of the private stack. The STM32 allocates it after the driver, see
+	; GEMDRIVE_boot_stack in GemDrive.cpp.
+syshook.stack	equ	start+512+syshook.stksize
+
 load	st	flock.w                 ; Lock floppy controller
 
 	bsr.w	syshook.setdmaaddr      ; Reset DMA chip

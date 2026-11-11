@@ -1,5 +1,7 @@
 /* ACSI2STM Atari hard drive emulator
  * Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+ * Copyright (C) 2026 by Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,10 +29,15 @@
 
 #if ! ACSI_STRICT
 
+// INIT_VER is the last byte of the init query. It changes with the hook
+// protocol, so a driver from another version finds no device instead of
+// crashing on commands it doesn't know.
 #if ACSI_PIO
 #define INIT_CMD 0x10
+#define INIT_VER 'V'
 #else
 #define INIT_CMD 0x11
+#define INIT_VER '2'
 #endif
 
 const
@@ -107,6 +114,11 @@ static const uint16_t translitChars[][2] = {
 // Offsets for variables to patch in the GEMDRIVE payload
 static const int GEMDRIVE_boot_acsiid = 23;
 static const int GEMDRIVE_boot_prmoff = 4;
+
+// Memory allocated for the resident driver: the boot sector followed by its
+// private stack. The driver expects the stack top at this offset from its
+// start: see syshook.stack in asm/GEMDRIVE/boot.s
+static const uint32_t GEMDRIVE_boot_stack = 512 + 2048;
 
 GemPattern::GemPattern() {
   clear();
@@ -1003,9 +1015,27 @@ void GemDrive::process(uint8_t cmd) {
       break;
 #endif
 
+#if ! ACSI_PIO
+    case 0x0c:
+    case 0x0d:
+      // GEMDOS system call hook, parameters out of DMA reach (TT-RAM or
+      // Alt-RAM): the driver sends their address instead.
+      // With $0c the supervisor stack is out of reach too: the driver runs
+      // on its private stack and also sends the caller's stack pointer.
+      dbg("GEMDOS* ");
+      paramAddr = readLong();
+      callerSp = cmd == 0x0c ? (uint32_t)readLong() : 0;
+      onGemdos();
+      break;
+#endif
+
     case 0x0e:
       // GEMDOS system call hook
       dbg("GEMDOS ");
+      paramAddr = 0;
+#if ! ACSI_PIO
+      callerSp = 0;
+#endif
       onGemdos();
       break;
 
@@ -1016,7 +1046,7 @@ void GemDrive::process(uint8_t cmd) {
       for(int b = 0; b < 5; ++b)
         buf[b] = DmaPort::readIrq();
 
-      if(buf[0] != 0x00 || buf[1] != 'G' || buf[2] != 'D' || buf[3] != 'R' || buf[4] != 'V') {
+      if(buf[0] != 0x00 || buf[1] != 'G' || buf[2] != 'D' || buf[3] != 'R' || buf[4] != INIT_VER) {
         // Incorrect query: send the 'no operation' SCSI status
         DmaPort::sendIrq(0x08);
         break;
@@ -1029,8 +1059,14 @@ void GemDrive::process(uint8_t cmd) {
       DmaPort::waitCommand();
       // The ST is now waiting for commands
 
+#if ! ACSI_PIO
+      // GEMDRIVE.PRG sends the address of its private stack
+      privateSp = readLong();
+#endif
+
       // Do initialization process
       dbg(" Init ");
+      initSystem();
       onInit();
       break;
 
@@ -1075,6 +1111,8 @@ void GemDrive::process(uint8_t cmd) {
 }
 
 void GemDrive::onBoot() {
+  initSystem();
+
 #ifdef ACSI_GEMDRIVE_LOAD_EMUTOS
   // Check for EmuTOS
   auto &fs = Devices::sdSlots[Devices::gemBootDrive].fs;
@@ -1102,16 +1140,67 @@ void GemDrive::onBoot() {
 
   // Upload the driver to resident memory
 
-  uint32_t driverSize = (GEMDRIVE_boot_bin_len + 0xf) & 0xfffffff0;
+  uint32_t driverSize = GEMDRIVE_boot_stack;
   ToLong driverMem = Malloc(driverSize);
 
+  if((uint32_t)driverMem == 0 || !isDma(driverMem + driverSize)) {
+    // Allocation failed or outside ST-RAM: DMA could not reach the driver
+    tosPrint("GemDrive: no ST-RAM\r\n");
+    forward();
+    return;
+  }
+
   sendAt(driverMem, buf, GEMDRIVE_boot_bin_len);
+#if ! ACSI_PIO
+  privateSp = driverMem + driverSize;
+#endif
 
   // Install system call hooks
   // Warning: installed system calls must be the same as in asm/GEMDRIVE/gem.s
   installHook(driverMem, 0x84); // GEMDOS
 
   onInit(true);
+}
+
+void GemDrive::initSystem() {
+  // Called first by onBoot and before onInit: nothing earlier makes the ST
+  // read data written by DMA, so cacheFlush is set before it can matter.
+
+#if ! ACSI_PIO
+  // Don't flush until this machine is known to need it
+  cacheFlush = false;
+
+  // Forget a call that a reset interrupted
+  callerSp = 0;
+#endif
+
+  // Set dmatop to phystop
+  dmatop = phystop();
+
+  // Cache OSHEADER values
+  os_beg = _sysbase();
+  os_beg = readLongAt(os_beg + offsetof(OSHEADER, os_beg));
+
+  // Check TOS version
+  os_version = readWordAt(os_beg + offsetof(OSHEADER, os_version));
+  dbgHex("TOS ", os_version, ' ');
+
+#if ! ACSI_PIO
+  // TOS 3 and 4 run on a 68030 with its caches on, and they don't see DMA
+  // writes. _longframe also rules out a 68010, where movec cacr traps.
+  cacheFlush = os_version >= 0x300 && _longframe();
+#endif
+
+  // Get basepage pointer
+  os_conf = readWordAt(os_beg + offsetof(OSHEADER, os_conf));
+  if(os_version < 0x102) {
+    if(os_conf >> 1 == 4)
+      p_run = 0x873c; // Spanish TOS 1.00 basePage pointer
+    else
+      p_run = 0x602c; // TOS 1.00 basePage pointer
+  } else {
+    p_run = readLongAt(os_beg + offsetof(OSHEADER, p_run));
+  }
 }
 
 void GemDrive::onInit(bool setBootDrive) {
@@ -1134,29 +1223,8 @@ void GemDrive::onInit(bool setBootDrive) {
   tosPrint("Running in PIO mode\r\n\n");
 #endif
 
-  // Set dmatop to phystop
-  dmatop = phystop();
-
-  // Cache OSHEADER values
-  os_beg = _sysbase();
-  os_beg = readLongAt(os_beg + offsetof(OSHEADER, os_beg));
-
-  // Check TOS version
-  os_version = readWordAt(os_beg + offsetof(OSHEADER, os_version));
-  dbgHex("TOS ", os_version, ' ');
   if(os_version < 0x104)
     tosPrint("\x07TOS < 1.04 has issues with GemDrive\r\n\n");
-
-  // Get basepage pointer
-  os_conf = readWordAt(os_beg + offsetof(OSHEADER, os_conf));
-  if(os_version < 0x102) {
-    if(os_conf >> 1 == 4)
-      p_run = 0x873c; // Spanish TOS 1.00 basePage pointer
-    else
-      p_run = 0x602c; // TOS 1.00 basePage pointer
-  } else {
-    p_run = readLongAt(os_beg + offsetof(OSHEADER, p_run));
-  }
 
   // Unmount all drives and initialize SD cards
   for(d = 0; d < driveCount; ++d) {
@@ -1262,7 +1330,7 @@ void GemDrive::onInit(bool setBootDrive) {
 }
 
 void GemDrive::onGemdos() {
-  Word op = readWord();
+  Word op = paramAddr ? readWordAt(paramAddr) : readWord();
   switch(op) {
 #define DECLARE_CALLBACK(name) \
   case Tos::name ## _op: { name ## _p p; \
@@ -1896,6 +1964,7 @@ bool GemDrive::onFsfirst(const Tos::Fsfirst_p &p) {
     return rte(EFILNF);
   dta.file.set(parent.mediaId, parent);
   dta.attribMask = p.attr;
+  dta.magic = GemDriveDTA::MAGIC;
 
   // Scan the first file
   return drive->scanDTA(dta, EFILNF);
@@ -1905,7 +1974,10 @@ bool GemDrive::onFsnext(const Tos::Fsnext_p &) {
   GemDriveDTA dta;
   readAt(dta, Fgetdta());
 
-  GemDrive *drive = getDrive(dta.file.mediaId, BlockDev::CACHED);
+  // In a DTA owned by TOS, these bytes are part of the search pattern
+  GemDrive *drive = nullptr;
+  if(dta.magic == GemDriveDTA::MAGIC)
+    drive = getDrive(dta.file.mediaId, BlockDev::CACHED);
   if(!drive)
     return forward();
 
@@ -2277,7 +2349,11 @@ const char * GemDrive::toUnicode(const GemPath &path, GemPattern &name) {
 
 void GemDrive::readParams(void *data, uint32_t size) {
   if(size > 1) {
-    readDma((uint8_t *)data, size);
+    if(paramAddr)
+      // Out of DMA reach: fetch exactly these bytes, after the opcode
+      readAt((uint8_t *)data, paramAddr + 2, size);
+    else
+      readDma((uint8_t *)data, size);
     notVerboseDump((uint8_t *)data, size);
   }
 }
@@ -2304,19 +2380,27 @@ uint32_t GemDrive::loadPrg(FsFile &prgFile, Long cmdline, Long env, uint32_t &ba
   if(prgFile.fileSize() < sizeof(ph) + ph.ph_tlen + ph.ph_dlen + ph.ph_slen + (ph.ph_absflag ? 0 : 4))
     return EPLFMT;
 
-  // Check free memory
-  if(Malloc(ToLong(0xff, 0xff, 0xff, 0xff)) < sizeof(PD) + ph.ph_tlen + ph.ph_dlen + ph.ph_blen)
-    return ENSMEM;
-
   // Create base page
   if(os_version < 0x200)
     basepage = Pexec_5(cmdline, env);
   else
     basepage = Pexec_7(ph.ph_prgflags, cmdline, env);
 
+  // Pexec returns an error code if it could not create one
+  if(!basepage || basepage >= 0xffffff00)
+    return ENSMEM;
+
   // Setup basepage
   PD pd;
   readAt(pd, basepage);
+
+  // Check free memory in the TPA that TOS really allocated. Depending on the
+  // program flags it can be in TT-RAM, which Malloc(-1) would not look at.
+  if(pd.p_hitpa - basepage < sizeof(PD) + ph.ph_tlen + ph.ph_dlen + ph.ph_blen) {
+    Mfree(pd.p_env);
+    Mfree(basepage);
+    return ENSMEM;
+  }
   pd.p_tbase = basepage + sizeof(PD);
   pd.p_tlen = ph.ph_tlen;
   pd.p_dbase = basepage + sizeof(PD) + ph.ph_tlen;
@@ -2527,6 +2611,7 @@ Long GemDrive::os_beg;
 Word GemDrive::os_version;
 Word GemDrive::os_conf;
 Long GemDrive::p_run;
+uint32_t GemDrive::paramAddr;
 
 #endif
 
