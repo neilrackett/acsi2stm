@@ -55,10 +55,10 @@ syshook:
 
 	savereg	                        ; Save registers
 
-	IFNE	PRG
 	bsr.w	syshook.setprm          ; Set a2 (DMA address) at the parameters
-	ELSE
-	bsr.b	syshook.setprm          ; Set a2 (DMA address) at the parameters
+
+	IFEQ	syshook.nott
+	bne.b	syshook.bounce          ; Supervisor mode: use the private stack
 	ENDC
 
 	cmp.w	#$0020,(a2)             ; Don't hook Super because it breaks
@@ -68,7 +68,7 @@ syshook:
 	IFNE	syshook.nott
 	bhs.b	syshook.forward         ; phystop: leave the call to TOS
 	ELSE
-	bhs.b	syshook.bounce          ; phystop (TT-RAM, Alt-RAM)
+	bhs.b	syshook.usrbnc          ; phystop (TT-RAM, Alt-RAM)
 	ENDC
 
 syshook.sendcmd:
@@ -124,28 +124,39 @@ syshook.rts
 
 	IFEQ	syshook.nott
 
-syshook.bounce:
-	; Parameters are above phystop, out of DMA reach: send their address
-	; with command $0d instead. The STM32 then fetches exactly the bytes it
-	; needs through the supervisor stack.
-	; If that stack is out of reach too (supervisor mode program in TT-RAM),
-	; switch to a private one and send the caller's sp with command $0c:
-	; the STM32 sets it back before leaving. The saved registers and the
-	; exception frame stay on the caller's stack.
-	lea	syshook.bnbuf(pc),a0    ; Store the parameters address in
-	move.l	a2,(a0)                 ; ST-RAM
-	move.l	a0,a2                   ; Point DMA at it
-	subq.b	#1,d0                   ; Command $0e becomes $0d
-	cmpa.l	phystop.w,sp            ; Check the supervisor stack
-	blo.b	syshook.sendcmd         ;
+syshook.usrbnc:
+	; User mode with parameters above phystop, out of DMA reach: send their
+	; address with command $0d instead. The STM32 then fetches exactly the
+	; bytes it needs through the supervisor stack.
+	lea	syshook.bnbuf(pc),a0    ;
+	bra.b	syshook.bncend          ;
 
+syshook.bounce:
+	; Supervisor mode: the caller's stack can't be trusted to hold a whole
+	; call. It can be tiny: TOS runs the AUTO folder on the 256 bytes of a
+	; process descriptor that stays in use afterwards, and what the STM32
+	; and interrupts pushed below it overwrote its file handles. It can also
+	; be out of DMA reach (program in TT-RAM).
+	; Run the call on a private stack and send the caller's sp along with
+	; the parameters address, command $0c: the STM32 sets sp back before
+	; leaving. The saved registers and the exception frame stay on the
+	; caller's stack.
+	cmp.w	#$0020,(a2)             ; Don't hook Super, see above
+	beq.b	syshook.forward         ;
+
+	lea	syshook.bnbuf(pc),a0    ;
 	move.l	sp,4(a0)                ; Store the caller's sp
 	IFNE	PRG
 	move.l	syshook.stkptr(pc),sp   ; Switch to the private stack
 	ELSE
 	lea	syshook.stack(pc),sp    ; Switch to the private stack
 	ENDC
-	subq.b	#1,d0                   ; Command $0d becomes $0c
+	subq.b	#1,d0                   ; Command $0e becomes $0c with the next
+
+syshook.bncend:
+	move.l	a2,(a0)                 ; Store the parameters address in ST-RAM
+	move.l	a0,a2                   ; Point DMA at it
+	subq.b	#1,d0                   ; Command $0e becomes $0d
 	bra.b	syshook.sendcmd         ;
 
 	ENDC
@@ -177,6 +188,8 @@ syshook.setprm:
 	; Point a2 at the parameters of the initial call
 	; The supervisor stack must point at the trap stack frame
 	; Alters d2 and a2 only
+	; Returns with Z set if the call comes from user mode, clear if from
+	; supervisor mode
 	btst	#5,8+spoff(sp)          ; Check if supervisor mode
 	beq.b	.usp                    ; Branch if user mode
 
@@ -210,6 +223,7 @@ syshook.execcmd:
 	move.b	d0,d1                   ;
 	dbra	d2,.rdbyte              ;
 	swap	d0                      ; Restore command byte
+	move.l	d1,a0                   ; a0 = parameter, for memory commands
 
 	; Route the call using a jump table
 	move.b	d0,d2                   ; Jump table for command byte
@@ -272,17 +286,14 @@ syshook.flush:
 	ENDC
 
 syshook.rdlong:
-	move.l	d1,a0
 	move.l	(a0),-(sp)
 	bra.b	syshook.dmasp
 
 syshook.rdword:
-	move.l	d1,a0
 	move.w	(a0),-(sp)
 	bra.b	syshook.dmasp
 
 syshook.rdbyte:
-	move.l	d1,a0
 	move.b	(a0),-(sp)
 	bra.b	syshook.dmasp
 
@@ -330,7 +341,6 @@ syshook.bytecp:
 	move.l	sp,a1                   ; Use a1 to leave sp untouched
 	move.w	(a1)+,d2                ; Pop byte count and point a1 at data
 	move.l	a1,a2                   ; Set DMA on stack data
-	move.l	d1,a0                   ; Memory address
 
 	btst	#0,d0                   ; Check if read or write
 	beq.b	syshook.byteread        ;

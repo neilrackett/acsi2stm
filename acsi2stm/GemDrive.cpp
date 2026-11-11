@@ -1018,13 +1018,22 @@ void GemDrive::process(uint8_t cmd) {
 #if ! ACSI_PIO
     case 0x0c:
     case 0x0d:
-      // GEMDOS system call hook, parameters out of DMA reach (TT-RAM or
-      // Alt-RAM): the driver sends their address instead.
-      // With $0c the supervisor stack is out of reach too: the driver runs
-      // on its private stack and also sends the caller's stack pointer.
+      // GEMDOS system call hook where the driver sends the address of the
+      // parameters instead of setting DMA on them.
+      // $0d: call from user mode with parameters out of DMA reach (TT-RAM
+      // or Alt-RAM).
+      // $0c: call from supervisor mode. The driver runs it on its private
+      // stack and also sends the caller's stack pointer, to set back
+      // before leaving the call.
       dbg("GEMDOS* ");
       paramAddr = readLong();
       callerSp = cmd == 0x0c ? (uint32_t)readLong() : 0;
+      if(isDma(paramAddr + 15)) {
+        // The parameters are within DMA reach after all: read them the
+        // usual way
+        setDmaWrite(paramAddr);
+        paramAddr = 0;
+      }
       onGemdos();
       break;
 #endif
