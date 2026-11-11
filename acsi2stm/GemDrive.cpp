@@ -2050,7 +2050,7 @@ bool GemDrive::onFxattr(const Tos::Fxattr_p &p) {
   if(!file)
     return rte(EFILNF);
 
-  // Build the MiNT XATTR struct (128 bytes, same layout as FreeMiNT kernel).
+  // Build the MiNT XATTR struct (52 bytes, same layout as FreeMiNT kernel).
   // Fields are Big-Endian; ToWord/ToLong handle that.
   struct TOS_PACKED {
     Word  st_mode;
@@ -2067,7 +2067,8 @@ bool GemDrive::onFxattr(const Tos::Fxattr_p &p) {
     Long  st_atime;
     Long  st_ctime;
     Word  st_attr;    // DOS attribute byte
-    Word  reserved[3];
+    Word  reserved;
+    Long  reserved2[2];
   } xattr;
   memset(&xattr, 0, sizeof(xattr));
 
