@@ -1,5 +1,7 @@
 ; ACSI2STM Atari hard drive emulator
 ; Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+; Copyright (C) 2026 by Neil Rackett
+; SPDX-License-Identifier: GPL-3.0-or-later
 
 ; This program is free software: you can redistribute it and/or modify
 ; it under the terms of the GNU General Public License as published by
@@ -111,7 +113,8 @@ acsicmd	; Execute an ACSI command
 	move.w	d2,(a1)                 ; Enable DMA
 
 	; Read status byte
-.rstat	btst	#10,d0                  ; Check infinite timeout flag
+.rstat	bsr.b	.rlse                   ; Let the last byte's ack end first
+	btst	#10,d0                  ; Check infinite timeout flag
 	beq.b	.ninf                   ;
 .inf	btst.b	#5,gpip.w               ; Wait for command with no time limit
 	bne.b	.inf                    ;
@@ -129,13 +132,25 @@ acsicmd	; Execute an ACSI command
 .ack	move.l	#600,d1                 ; 3 second timeout
 	bra.b	.dak                    ;
 
-.sak	move.l	#20,d1                  ; 100ms timeout
+.sak	bsr.b	.rlse                   ; Let the previous ack end first
+	move.l	#20,d1                  ; 100ms timeout
 
 .dak	add.l	hz200.w,d1              ;
 .await	cmp.l	hz200.w,d1              ; Test timeout
 	blo.b	.timout                 ;
 	btst.b	#5,gpip.w               ; Test command acknowledge
 	bne.b	.await                  ;
+	rts
+
+.rlse	; The device pulls IRQ low to acknowledge a byte and releases it when
+	; the next byte comes. A fast CPU like the TT's can test IRQ again
+	; before the line is back up, take the old acknowledge for a new one
+	; and run ahead of the device.
+	; Wait until IRQ is high again, for 32 reads of the MFP at most: a
+	; slow CPU can miss the moment, and then the low it sees is a new ack.
+	moveq	#31,d1                  ;
+.rlsel	btst.b	#5,gpip.w               ;
+	dbne	d1,.rlsel               ;
 	rts
 
 .timout	moveq	#-1,d0                  ; Return -1
