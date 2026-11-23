@@ -94,31 +94,35 @@ main	lea	stack,sp                ; Initialize stack
 
 .found	; GemDrive is already installed
 	; If the boot sector did it on a Mega STE, take over: its driver has
-	; no room for the cache workaround.
+	; no room for the cache workaround. Take over too on machines with
+	; TT-RAM or Alt-RAM: this driver copies transfers to and from them
+	; faster. The diagnostic driver takes over on any machine.
 
 	cmp.b	#$60,6(a6)              ; "bra.b syshook": it's a GEMDRIVE.PRG
 	beq.b	.alrdy                  ;
 
 	IFEQ	DIAG
-	tst.b	d4                      ; Boot sector driver on another
-	beq.b	.quit                   ; machine: nothing to do
+	tst.b	d4                      ; Mega STE
+	bne.b	.take                   ;
+	cmp.l	#$1357bd13,ramvalid.w   ; RAM above phystop
+	bne.b	.quit                   ;
+	move.l	ramtop.w,d0             ;
+	cmp.l	phystop.w,d0            ;
+	bls.b	.quit                   ; Other machines: nothing to do
+.take
 	ENDC
 
 	move.w	4(a6),d7                ; d7 = its "moveq #acsiid+command,d0"
-	IFNE	DIAG
-	tst.b	d4                      ; The diagnostic driver takes over on
-	beq.b	.ask                    ; any machine
-	ENDC
+	tst.b	d4                      ;
+	beq.b	.ask                    ;
 	move.b	mstecache.w,d5          ; d5 = state of the Mega STE cache
 	and.b	#$fe,mstecache.w        ; Turn it off while talking
 
 .ask	bsr.w	query                   ; Check that the STM32 has the same
 	beq.b	.tkover                 ; protocol version as this driver
 
-	IFNE	DIAG
 	tst.b	d4                      ;
 	beq.b	.wrong                  ;
-	ENDC
 	move.b	d5,mstecache.w          ; Set the Mega STE cache back
 .wrong	print	wrgver(pc)              ;
 .quit	Pterm0	                        ;
@@ -145,7 +149,15 @@ main	lea	stack,sp                ; Initialize stack
 	move.w	d6,(a5)+                ; d6 = "bra.b syshook"
 	sub.w	#$0014,d6               ; A vector was written
 
+	IFNE	DIAG
 	print	tkover(pc)              ;
+	ELSE
+	lea	tkover(pc),a0           ; Say which driver took over
+	tst.b	d4                      ;
+	bne.b	.tkmsg                  ;
+	lea	tkovtt(pc),a0           ;
+.tkmsg	print	(a0)                    ;
+	ENDC
 	bra.w	.instok                 ;
 
 .notins	; GemDrive not installed

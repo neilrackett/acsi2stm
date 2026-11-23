@@ -154,6 +154,8 @@ dskbufp=$4c6                            ; Disk buffers
 bufl=$4b2                               ; Buffer lists
 _longframe=$59e                         ; Word: true if using long frames
 _p_cookies=$5a0                         ; Cookie jar address, 0 if none
+ramtop=$5a4                             ; Top of TT-RAM or Alt-RAM
+ramvalid=$5a8                           ; $1357bd13 if ramtop is valid
 memvalid=$420                           ; Magic number to detect if RAM is valid
 
 ; Exception vectors

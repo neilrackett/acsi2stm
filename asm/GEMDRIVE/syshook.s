@@ -383,6 +383,41 @@ syshook.bytecp:
 	move.w	(a1)+,d2                ; Pop byte count and point a1 at data
 	move.l	a1,a2                   ; Set DMA on stack data
 
+	IFNE	PRG
+	; GEMDRIVE.PRG copies longs where it can: TT-RAM transfers go through
+	; ST-RAM in 4 KB pieces with these commands (see SysHook::bounceIn).
+	; The boot sector has no room for it.
+
+	btst	#0,d0                   ; Command $83: copy from the stack (a1)
+	bne.b	.copy                   ; to memory (a0)
+	exg	a0,a1                   ; Command $82: from memory to the stack
+.copy	addq.w	#1,d2                   ; d2 = byte count
+	move.w	a0,d1                   ; Copy longs only if both addresses are
+	sub.w	a1,d1                   ; even after the same number of bytes,
+	lsr.b	#1,d1                   ; as a 68000 needs
+	bcs.b	.bonly                  ;
+	move.w	a0,d1                   ; Odd addresses: one byte first
+	lsr.b	#1,d1                   ;
+	bcc.b	.lset                   ;
+	move.b	(a1)+,(a0)+             ;
+	subq.w	#1,d2                   ;
+.lset	move.w	d2,d1                   ; d1 = number of 16 byte blocks
+	lsr.w	#4,d1                   ;
+	and.w	#15,d2                  ; d2 = bytes left after them
+	bra.b	.lnext                  ;
+.lcpy	move.l	(a1)+,(a0)+             ;
+	move.l	(a1)+,(a0)+             ;
+	move.l	(a1)+,(a0)+             ;
+	move.l	(a1)+,(a0)+             ;
+.lnext	dbra	d1,.lcpy                ;
+.bonly	bra.b	.bnext                  ;
+.bcpy	move.b	(a1)+,(a0)+             ;
+.bnext	dbra	d2,.bcpy                ;
+
+	btst	#0,d0                   ; Continue in DMA read mode after $83,
+	bne.b	syshook.rcmd            ; in DMA write mode after $82
+
+	ELSE
 	btst	#0,d0                   ; Check if read or write
 	beq.b	syshook.byteread        ;
 
@@ -400,6 +435,7 @@ syshook.byteread:
 	dbra	d2,.cpy                 ;
 
 	; Fall through syshook.wcmd
+	ENDC
 
 syshook.wcmd:
 	; Continue the command stream in DMA write mode
