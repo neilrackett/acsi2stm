@@ -21,6 +21,14 @@
 
 main	lea	stack,sp                ; Initialize stack
 
+	move.l	sp,d0                   ; Give back the memory after the
+	lea	start-$100(pc),a0       ; program, so that the STM32 can
+	sub.l	a0,d0                   ; allocate a buffer there for TT-RAM
+	move.l	d0,-(sp)                ; (see GemDrive::onInit)
+	pea	(a0)                    ;
+	clr.w	-(sp)                   ;
+	gemdos	Mshrink,12              ;
+
 	Super	                        ; This program needs super user
 
 	lea	start(pc),a0            ; DMA must reach the resident driver:

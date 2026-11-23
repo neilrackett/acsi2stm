@@ -1186,6 +1186,9 @@ void GemDrive::initSystem() {
 
   // Forget a call that a reset interrupted
   callerSp = 0;
+
+  // onInit allocates it again if needed
+  bounceTop = 0;
 #endif
 
   // Set dmatop to phystop
@@ -1239,6 +1242,18 @@ void GemDrive::onInit(bool setBootDrive) {
 
   if(os_version < 0x104)
     tosPrint("\x07TOS < 1.04 has issues with GemDrive\r\n\n");
+
+#if ! ACSI_PIO
+  // With TT-RAM, keep a buffer in ST-RAM for big copies out of DMA reach.
+  // Allocated during boot or by GEMDRIVE.PRG, it stays allocated for good.
+  if(ramvalid() == 0x1357bd13 && ramtop() > dmatop) {
+    uint32_t bounce = Malloc(bounceSize);
+    if(bounce && isDma(bounce + bounceSize - 1))
+      bounceTop = bounce + bounceSize;
+    else if(bounce)
+      Mfree(bounce);
+  }
+#endif
 
   // Unmount all drives and initialize SD cards
   for(d = 0; d < driveCount; ++d) {

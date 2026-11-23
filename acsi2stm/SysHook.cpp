@@ -43,9 +43,16 @@ void SysHook::sendAt(uint32_t address, const uint8_t *bytes, int count)
     // Indirect copy: upload a byte count and the data on the ST stack, then
     // let the ST copy them. Big pieces for big copies, because programs in
     // TT-RAM read whole files this way. Small ones keep the stack use low.
-    const int pieceSize = count > 30 ? 256 : 32;
+    // Bigger copies go through the bounce buffer if there is one.
+    int pieceSize = count > 30 ? 256 : 32;
+    uint32_t sp = 0;
 
-    shiftStack(-pieceSize);
+    if(bounceTop && count > pieceSize - 2) {
+      pieceSize = bouncePiece;
+      sp = bounceIn(pieceSize);
+    } else {
+      shiftStack(-pieceSize);
+    }
 
     while(count > 0) {
       int c = count > pieceSize - 2 ? pieceSize - 2 : count;
@@ -65,7 +72,10 @@ void SysHook::sendAt(uint32_t address, const uint8_t *bytes, int count)
       count -= c;
     }
 
-    shiftStack(pieceSize);
+    if(sp)
+      bounceOut(sp, pieceSize);
+    else
+      shiftStack(pieceSize);
     return;
   }
 
@@ -189,10 +199,17 @@ void SysHook::clearAt(uint32_t bytes, uint32_t address) {
     // Out of DMA reach (TT-RAM, Alt-RAM): the ST copies zeros from its
     // stack. A whole TPA can be megabytes, so copy big pieces and push the
     // byte count only when it changes: one hook command per piece.
-    static const uint32_t pieceSize = 128;
+    // Bigger pieces through the bounce buffer if there is one.
+    uint32_t pieceSize = 128;
+    uint32_t sp = 0;
 
     // Upload some blank bytes on the stack
-    shiftStack(-(int)pieceSize);
+    if(bounceTop && bytes > pieceSize) {
+      pieceSize = bouncePiece;
+      sp = bounceIn(pieceSize);
+    } else {
+      shiftStack(-(int)pieceSize);
+    }
     for(uint32_t i = 0; i < pieceSize; i += sizeof(blank))
       sendDma(blank, sizeof(blank));
 
@@ -213,7 +230,10 @@ void SysHook::clearAt(uint32_t bytes, uint32_t address) {
     }
 
     // Free data from stack
-    shiftStack((int)pieceSize + (pushed ? 2 : 0));
+    if(sp)
+      bounceOut(sp, pieceSize + (pushed ? 2 : 0));
+    else
+      shiftStack((int)pieceSize + (pushed ? 2 : 0));
 
     return;
   }
@@ -318,13 +338,29 @@ void SysHook::readAtIndirect(uint8_t *bytes, ToLong source, int count) {
     return;
   }
 
-  // Make room for a 32 bytes buffer on the ST stack
-  shiftStack(-32);
-  while(count) {
-    int l = count > 32 ? 32 : count;
+  // Make room for a 32 bytes buffer on the ST stack, or use the bounce
+  // buffer for bigger copies if there is one
+  int pieceSize = 32;
+#if ! ACSI_PIO
+  uint32_t sp = 0;
+  if(bounceTop && count > pieceSize) {
+    pieceSize = bouncePiece;
+    sp = bounceIn(pieceSize);
+  } else
+#endif
+  shiftStack(-pieceSize);
 
-    // Write byte count on the stack
-    push(ToWord(l - 1));
+  int pushed = 0;
+  while(count) {
+    int l = count > pieceSize ? pieceSize : count;
+
+    // Write the byte count on the stack, if it changed
+    if(l != pushed) {
+      if(pushed)
+        shiftStack(2);
+      push(ToWord(l - 1));
+      pushed = l;
+    }
 
     // Do the copy on the ST side
     copyToStack(source);
@@ -332,14 +368,18 @@ void SysHook::readAtIndirect(uint8_t *bytes, ToLong source, int count) {
     // Fetch data
     readDma(bytes, l);
 
-    // Pop byte count
-    shiftStack(2);
-
     count -= l;
     bytes += l;
     source += l;
   }
-  shiftStack(32);
+
+  // Free the buffer and the byte count
+#if ! ACSI_PIO
+  if(sp)
+    bounceOut(sp, pieceSize + 2);
+  else
+#endif
+  shiftStack(pieceSize + 2);
 }
 
 void SysHook::readAtIndirectShort(uint8_t *bytes, ToLong source, int count) {
@@ -540,10 +580,27 @@ void SysHook::restoreStack() {
   }
 }
 
+uint32_t SysHook::bounceIn(int bytes) {
+  // Read sp: the ST pushes it, then sp is 4 bytes lower than the value read
+  pushSp();
+  Long sp;
+  read(sp);
+
+  // Switch to the bounce buffer
+  shiftStack(bounceTop - bytes - (sp - 4));
+  return sp;
+}
+
+void SysHook::bounceOut(uint32_t sp, int bytes) {
+  // Back to the stack before bounceIn, which also pops what pushSp pushed
+  shiftStack(sp - (bounceTop - bytes));
+}
+
 bool SysHook::cacheFlush = false;
 bool SysHook::cacheDirty = false;
 uint32_t SysHook::callerSp = 0;
 uint32_t SysHook::privateSp = 0;
+uint32_t SysHook::bounceTop = 0;
 #endif
 
 uint32_t SysHook::dmatop = 0x40000; // Default to 256k (minimum ST-RAM)

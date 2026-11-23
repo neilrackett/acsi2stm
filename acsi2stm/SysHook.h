@@ -1,5 +1,7 @@
 /* ACSI2STM Atari hard drive emulator
  * Copyright (C) 2019-2025 by Jean-Matthieu Coulon
+ * Copyright (C) 2026 by Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -388,6 +390,26 @@ struct SysHook: public Monitor {
 
   // Top of the driver's private stack
   static uint32_t privateSp;
+
+  // Top of a buffer in ST-RAM that big copies to and from memory out of DMA
+  // reach (TT-RAM) go through, or 0 if there is none. The ST uses it as a
+  // stack: the data sits at its top, interrupts push below.
+  static uint32_t bounceTop;
+
+  // Most bytes copied at a time through the bounce buffer: a whole
+  // Devices::buf with its byte count and padding. A multiple of 32 for
+  // clearAt.
+  static const int bouncePiece = 4096 + 32;
+
+  // Size of the bounce buffer, with room below the data for interrupts
+  static const uint32_t bounceSize = bouncePiece + 1024;
+
+  // Move sp to the bounce buffer, leaving bytes free at its top, and set DMA
+  // on them. Returns the sp to give to bounceOut.
+  static uint32_t bounceIn(int bytes);
+
+  // Move sp back from the bounce buffer
+  static void bounceOut(uint32_t sp, int bytes);
 #endif
 
   // Send a command and wait for completion
