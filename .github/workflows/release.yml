@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 by Neil Rackett
+#
+# Releases every push to main: builds the TT and Mega STE packages with the
+# repository's build container, moves the tag v<VERSION> to the pushed commit
+# and attaches the packages to that tag's GitHub release, replacing the zips
+# already there.
+#
+# Pushes that only change documentation or the PCB files don't release.
+# Without a release for the tag (after a VERSION change), it creates a draft
+# one to write notes for and publish by hand.
+#
+# It can also be run from the Actions tab, on main only, to release main again.
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'doc/**'
+      - '**.md'
+      - 'pcb/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One release at a time: a newer push waits for the current run to finish
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Read the version
+        run: echo "TAG=v$(cat VERSION)" >> "$GITHUB_ENV"
+
+      - name: Build the container image
+        run: make image
+
+      - name: Build the TT and Mega STE firmware and drivers
+        run: make tt mste
+
+      - name: Package
+        run: |
+          set -eu
+          mkdir dist
+          for target in tt mste; do
+            name="$(basename build.$target/acsi2stm-*-debug.ino.bin -debug.ino.bin)"
+            cp -r "build.$target" "dist/$name"
+            (cd dist && zip -qrX "$name.zip" "$name")
+          done
+          ls -l dist/*.zip
+
+      - name: Move the tag to this commit
+        run: |
+          git tag -f "$TAG"
+          git push -f origin "refs/tags/$TAG"
+
+      - name: Attach the packages to the release
+        run: |
+          set -eu
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag \
+              --title "ACSI2STM $(cat VERSION)" \
+              --notes "Built from $(git rev-parse --short HEAD)."
+          fi
+          gh release upload "$TAG" dist/*.zip --clobber
