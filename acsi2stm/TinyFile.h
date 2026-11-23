@@ -77,6 +77,10 @@ struct __attribute__((__packed__)) TinyFile {
   static FsFile lastFile;
   static FsFile lastParent;
   static uint16_t lastMediaId;
+
+  // The TinyFile that lastFile was left open for, if any (see
+  // GemFile::reopen). closeLast clears it.
+  static const TinyFile *lastOwner;
 };
 
 #endif

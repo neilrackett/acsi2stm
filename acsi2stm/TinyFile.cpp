@@ -148,6 +148,7 @@ void TinyFile::closeLast() {
   lastFile.close();
   lastParent.close();
   lastMediaId = 0;
+  lastOwner = nullptr;
 }
 
 void TinyFile::ejected(uint16_t mediaId) {
@@ -156,9 +157,11 @@ void TinyFile::ejected(uint16_t mediaId) {
     lastFile = FsFile();
     lastParent = FsFile();
     lastMediaId = 0;
+    lastOwner = nullptr;
   }
 }
 
 FsFile TinyFile::lastFile;
 FsFile TinyFile::lastParent;
 uint16_t TinyFile::lastMediaId;
+const TinyFile *TinyFile::lastOwner = nullptr;

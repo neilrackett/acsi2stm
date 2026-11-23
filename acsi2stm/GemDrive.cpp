@@ -883,6 +883,8 @@ bool GemPath::isContainedBy(FsFile &file) const {
 }
 
 void GemFile::set(GemPath &parent, FsFile &file, oflag_t oflag_, Long basePage_) {
+  if(lastOwner == this)
+    closeLast();
   TinyFile::set(parent.mediaId, parent, file);
   position = 0;
   basePage = basePage_;
@@ -895,9 +897,17 @@ FsFile & GemFile::reopen() {
     closeLast();
     return lastFile;
   }
-  open(drive->sd.fs, oflag);
-  if(!lastFile)
-    return lastFile;
+
+  // Leave the file open from one piece to the next: opening it again means
+  // following its cluster chain from the start to the position, which made
+  // reads slower the further they were into a big file. onGemdos closes it
+  // before calls that may change files behind its back.
+  if(lastOwner != this || !lastFile.isOpen()) {
+    open(drive->sd.fs, oflag);
+    if(!lastFile)
+      return lastFile;
+    lastOwner = this;
+  }
   if(!lastFile.seek(position))
     close();
   return lastFile;
@@ -1360,6 +1370,13 @@ void GemDrive::onInit(bool setBootDrive) {
 
 void GemDrive::onGemdos() {
   Word op = paramAddr ? readWordAt(paramAddr) : readWord();
+
+  // Only Fread and Fseek keep a file open from the previous call (see
+  // GemFile::reopen). Close it before other calls that may touch files:
+  // the ones below Dcreate don't.
+  if(op >= Dcreate_op && op != Fread_op && op != Fseek_op)
+    TinyFile::closeLast();
+
   switch(op) {
 #define DECLARE_CALLBACK(name) \
   case Tos::name ## _op: { name ## _p p; \
